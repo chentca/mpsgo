@@ -8,13 +8,13 @@ import (
 	"net"
 	"os"
 	//"reflect"
-	//	"runtime"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
 )
 
-const RECV_BUF_LEN = 204800
+const RECV_BUF_LEN = 10240
 const CONNTO_MIN = time.Second * 5
 const CONNTO_MID = time.Minute * 1
 const CONNTO_MAX = time.Minute * 2
@@ -33,6 +33,8 @@ const strlist1 = `
 t:Telnet服务,Telnet
 `
 
+var Numcpu int = runtime.NumCPU()
+var mpsini os.File
 var autorun = "0"
 var ok = []byte{0}
 var quitcode = []byte{1}
@@ -42,9 +44,11 @@ var mpsid, abnum int = 0, 0
 var reads int64 = 0
 var spd1, spd10, spd60 int64 = 0, 0, 0
 var req chan int
+var abnumad chan bool
+
 var mpstab map[int]*mpsinfo
 var mpssvrtab map[string]*map[string]*[]net.Conn
-var bufab []byte = make([]byte, RECV_BUF_LEN)
+
 
 type mpsinfo struct { //mps信息记录
 	info, lip, rip, mpsname string
@@ -54,14 +58,16 @@ type mpsinfo struct { //mps信息记录
 }
 
 func main() {
+	defer quiter()
+	defer recover()
 	var n int
 	var spdn int64 = 0
-	//runtime.GOMAXPROCS(2)
-	defer recover()
+	runtime.GOMAXPROCS(Numcpu)
+	req = make(chan int, Numcpu)      //统计转发数量
+	abnumad = make(chan bool, Numcpu) //统计转发线程数量
 	mpstab = make(map[int]*mpsinfo)
 	mpssvrtab = make(map[string]*map[string]*[]net.Conn)
-	req = make(chan int, 5)
-	defer quiter()
+
 	ini, err := os.OpenFile("mpsgo.ini", os.O_RDWR|os.O_CREATE, 0666)
 	if err != nil {
 		fmt.Println("err=", err.Error())
@@ -92,10 +98,18 @@ func main() {
 			}
 		}
 	}()
+	var f bool
 	for notquit {
 		select {
 		case n = <-req:
 			reads += int64(n)
+
+		case f = <-abnumad:
+			if f == true {
+				abnum++
+			} else {
+				abnum--
+			}
 		}
 	}
 
@@ -120,6 +134,7 @@ func mpsticker(this *mpsinfo) { //定期更新mps的资源
 		return
 	}
 	_, err = conn.Write(append([]byte{1}, []byte(this.mpsname)...)) //type source
+	conn.SetReadDeadline(time.Now().Add(CONNTO_MAX))
 	_, err = conn.Read(buf)
 	if buf[0] != 0 {
 		conn.Close()
@@ -162,7 +177,7 @@ func mpsuser2(conn net.Conn, this *mpsinfo) {
 		return
 	}
 
-	conn2.SetReadDeadline(time.Now().Add(time.Second))
+	conn2.SetReadDeadline(time.Now().Add(CONNTO_MAX))
 	_, err = conn2.Read(buf)
 	if err != nil || buf[0] != 0 {
 		conn.Close()
@@ -217,18 +232,16 @@ func hand(source, user *[]net.Conn) { //撮合资源和用户连接
 
 func mpssvr2(conn net.Conn) {
 	defer recover()
-	var buf = make([]byte, RECV_BUF_LEN)
-	conn.SetReadDeadline(time.Now().Add(time.Second))
-	n, err := conn.Read(buf)
+	var bufab = make([]byte, RECV_BUF_LEN)
+	conn.SetReadDeadline(time.Now().Add(time.Second * 3))
+	n, err := conn.Read(bufab)
 	if err != nil {
 		conn.Close()
 		return
 	}
-
-	switch buf[0] { //第一次握手
+	mpsname := string(bufab[1:n])
+	switch bufab[0] { //第一次握手
 	case 1: //source
-
-		mpsname := string(buf[1:n])
 
 		if mpssvrtab[mpsname] == nil {
 			source := new([]net.Conn)
@@ -250,8 +263,6 @@ func mpssvr2(conn net.Conn) {
 		}
 		hand(source, user)
 	case 2: //user
-
-		mpsname := string(buf[1:n])
 
 		if mpssvrtab[mpsname] == nil {
 			source := new([]net.Conn)
@@ -301,9 +312,7 @@ func (this *mpsinfo) mpssvr() { //mps中转服务
 
 func list() string { //显示mps列表信息
 	var str string = "\r\n"
-	//fmt.Println("")
 	for key, info := range mpstab {
-		//fmt.Println(key, info.info)
 		str += fmt.Sprint(" ", key, " ", info.info, "\r\n")
 	}
 	if autorun == "1" {
@@ -573,7 +582,8 @@ func state() string {
 	str = `
 状态信息:
 `
-	str += fmt.Sprint("转发纤程:", abnum, " 转发数据: ", reads, "速度：秒-10秒-分钟 ", spd1, spd10, spd60, "\r\n")
+	str += fmt.Sprint(" NumCPU: ", Numcpu, " 转发纤程: ", abnum, "\r\n")
+	str += fmt.Sprint(" 转发数据: ", reads, "速度：秒-10秒-分钟 ", spd1, spd10, spd60, "\r\n")
 	for k, v := range mpssvrtab {
 		str += fmt.Sprint("mpsname:", k, " 资源:", strconv.Itoa(len(*(*v)["s"])), " 用户:", strconv.Itoa(len(*(*v)["u"])), "\r\n")
 	}
@@ -780,8 +790,6 @@ func telsvr2(conn net.Conn) {
 	}
 }
 
-var mpsini os.File
-
 func wstr(f *os.File, str string) { //写文件
 	f.WriteString(str + "\r\n")
 }
@@ -978,44 +986,44 @@ func (this *mpsinfo) ptop() { //端口转发服务
 	}()
 }
 
-func s5(buf1 []byte, conn net.Conn, n int) {
+func s5(conn net.Conn, n int) {
 	defer recover()
-	addstr := buf1
-	buf := make([]byte, RECV_BUF_LEN)
+
+	bufab := make([]byte, RECV_BUF_LEN)
 	n, err := conn.Write([]byte{5, 0})
 	if err != nil {
 		//fmt.Println("S5应答错误4：" + err.Error())
 		conn.Close()
 		return
 	}
-	conn.SetReadDeadline(time.Now().Add(time.Second))
-	n, err = conn.Read(buf)
+	conn.SetReadDeadline(time.Now().Add(CONNTO_MAX))
+	n, err = conn.Read(bufab)
 	if n == 0 || err != nil {
 		conn.Close()
 		return
 	}
-	addstr = buf
+
 	switch {
-	case bytes.Equal(buf[0:4], []byte{5, 1, 0, 1}): //ip请求
+	case bytes.Equal(bufab[0:4], []byte{5, 1, 0, 1}): //ip请求
 		var ip bytes.Buffer
 
-		ip.WriteString(strconv.Itoa(int(buf[4])) + "." +
-			strconv.Itoa(int(buf[5])) + "." +
-			strconv.Itoa(int(buf[6])) + "." +
-			strconv.Itoa(int(buf[7])) + ":" +
-			strconv.Itoa(int(buf[9])+int(buf[8])*256))
+		ip.WriteString(strconv.Itoa(int(bufab[4])) + "." +
+			strconv.Itoa(int(bufab[5])) + "." +
+			strconv.Itoa(int(bufab[6])) + "." +
+			strconv.Itoa(int(bufab[7])) + ":" +
+			strconv.Itoa(int(bufab[9])+int(bufab[8])*256))
 		conn2, err := net.DialTimeout("tcp", ip.String(), DialTO)
 		if err != nil {
 			//fmt.Println("S5 连接错误5：" + err.Error())
-			addstr[1] = 3
-			conn.Write(addstr[0:n])
+			bufab[1] = 3
+			conn.Write(bufab[0:n])
 			conn.Close()
 			return
 		}
-		addstr[1] = 0
-		_, err = conn.Write(addstr[0:n])
+		bufab[1] = 0
+		_, err = conn.Write(bufab[0:n])
 		if err != nil {
-			//fmt.Println("S5 应答错误6：" + err.Error())
+			dbg("S5 应答错误6：" + err.Error())
 			conn.Close()
 			conn2.Close()
 			return
@@ -1023,21 +1031,21 @@ func s5(buf1 []byte, conn net.Conn, n int) {
 		go Atob(conn, conn2, 0)
 		go Atob(conn2, conn, 0)
 
-	case bytes.Equal(buf[0:4], []byte{5, 1, 0, 3}): //域名请求
-		ip := string(buf[5:buf[4]+5]) + ":" + strconv.Itoa(int(buf[n-2])*256+int(buf[n-1]))
-		//fmt.Println("ip:", ip)
+	case bytes.Equal(bufab[0:4], []byte{5, 1, 0, 3}): //域名请求
+		ip := string(bufab[5:bufab[4]+5]) + ":" + strconv.Itoa(int(bufab[n-2])*256+int(bufab[n-1]))
+		dbg("ip:", ip)
 		conn2, err := net.DialTimeout("tcp", ip, DialTO)
 		if err != nil {
-			//fmt.Println("S5 连接错误7：" + err.Error())
-			addstr[1] = 3
-			conn.Write(addstr[0:n])
+			dbg("S5 连接错误7：" + err.Error())
+			bufab[1] = 3
+			conn.Write(bufab[0:n])
 			conn.Close()
 			return
 		}
-		addstr[1] = 0
-		_, err = conn.Write(addstr[0:n])
+		bufab[1] = 0
+		_, err = conn.Write(bufab[0:n])
 		if err != nil {
-			//fmt.Println("S5 应答错误8：" + err.Error())
+			dbg("S5 应答错误8：" + err.Error())
 			conn.Close()
 			conn2.Close()
 			return
@@ -1052,11 +1060,11 @@ func s5(buf1 []byte, conn net.Conn, n int) {
 
 func socksswich(conn net.Conn) { //判断代理类型
 	defer recover()
-	buf := make([]byte, RECV_BUF_LEN)
-	conn.SetReadDeadline(time.Now().Add(time.Second))
-	n, err := conn.Read(buf)
-	if bytes.Equal(buf[0:2], []byte{5, 1}) && err == nil { //socks5
-		go s5(buf, conn, n)
+	bufab := make([]byte, RECV_BUF_LEN)
+	conn.SetReadDeadline(time.Now().Add(CONNTO_MAX))
+	n, err := conn.Read(bufab)
+	if bytes.Equal(bufab[0:2], []byte{5, 1}) && err == nil { //socks5
+		go s5(conn, n)
 		return
 	}
 	conn.Close()
@@ -1072,7 +1080,7 @@ func (this *mpsinfo) socks45() {
 		for notquit && this.running {
 			conn, err := this.listener.Accept() //接受连接
 			if err != nil {
-				//fmt.Println("接受代理错误1：" + err.Error())
+				dbg("接受代理错误1：" + err.Error())
 				return
 			}
 			go socksswich(conn)
@@ -1081,32 +1089,34 @@ func (this *mpsinfo) socks45() {
 }
 
 func Atob(conn, conn2 net.Conn, psw int) { //数据转发
-	//buf := make([]byte, RECV_BUF_LEN)
+	bufab := make([]byte, RECV_BUF_LEN)
 	defer recover()
 	defer conn.Close()
 	defer conn2.Close()
-	defer func() { abnum-- }()
-	abnum++
+	defer func() {
+		abnumad <- false
+	}()
+
+	abnumad <- true
+	pswa := byte(psw)
 	for notquit {
+
 		conn.SetDeadline(time.Now().Add(CONNTO_MAX))
 		n, err := conn.Read(bufab)
-		if err != nil {
+
+		if n <= 0 || err != nil {
 			return
 		}
-		if n == 0 {
-			return
-		}
-		if psw != 0 {
+		if pswa != 0 {
 			for i := 0; i < n; i++ {
-				bufab[i] ^= byte(psw)
+				(bufab)[i] ^= pswa
 			}
 		}
 		n, err = conn2.Write(bufab[0:n])
-		if err != nil {
-			//println("Write Buffer Error:", n, err.Error())
+
+		if n <= 0 || err != nil {
 			return
 		}
-
 		req <- n
 
 	}
