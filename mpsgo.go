@@ -1,5 +1,6 @@
 package main
-//ver  v3.1.1 2016.3.20
+
+//ver 3.1.1 2016.3.20
 import (
 	"bufio"
 	"bytes"
@@ -33,13 +34,13 @@ const strlist1 = `
 t:Telnet服务,Telnet
 `
 
+var dbgflag bool = true
 var Numcpu int = runtime.NumCPU()
 var mpsini os.File
 var autorun = "0"
 var ok = []byte{0}
 var quitcode = []byte{1}
 var notquit bool = true
-var dbgflag bool = false
 var mpsid, abnum int = 0, 0
 var reads int64 = 0
 var spd1, spd10, spd60 int64 = 0, 0, 0
@@ -274,7 +275,6 @@ func mpssvr2(conn net.Conn) {
 		source := a["s"]
 		user := a["u"]
 		*user = append(*user, conn)
-		//fmt.Println("append user:", mpsname, len(*user), len(*source))
 		if len(*user) > 60 {
 			conn = (*user)[0]
 			*user = (*user)[1:]
@@ -297,9 +297,6 @@ func (this *mpsinfo) mpssvr() { //mps中转服务
 		defer delete(mpstab, this.id)
 		defer recover()
 		defer this.listener.Close()
-		//defer delete(mpssvrtab, this.mpsname)
-		//var source, user []net.Conn
-		//mpssvrtab[this.mpsname] = &map[string]*([]net.Conn){"s": &source, "u": &user}
 
 		for notquit && this.running {
 			conn, err := this.listener.Accept() //接受连接
@@ -313,9 +310,7 @@ func (this *mpsinfo) mpssvr() { //mps中转服务
 
 func list() string { //显示mps列表信息
 	var str string = "\r\n"
-	//fmt.Println("")
 	for key, info := range mpstab {
-		//fmt.Println(key, info.info)
 		str += fmt.Sprint(" ", key, " ", info.info, "\r\n")
 	}
 	if autorun == "1" {
@@ -356,8 +351,9 @@ func telsvrinputer(str1 string, conn net.Conn) string { //命令行交互
 			if len(str) > 0 {
 				str = str[0 : len(str)-1]
 			}
+		} else {
+			str += string(buf[0])
 		}
-		str += string(buf[0])
 
 	}
 }
@@ -373,7 +369,6 @@ func inputer() { //cmd交互界面
 		if len(inputstr) != 1 {
 			inputstr = "0"
 		}
-		//fmt.Println("inpustr:", inputstr, inputstr[0])
 		switch inputstr {
 		case "1": //list
 			if len(mpstab) == 0 {
@@ -429,7 +424,6 @@ func inputer() { //cmd交互界面
 			}
 			fmt.Println("端口转发开始监听:", lip)
 			mpsid++
-			//go ptop(listener, rip, int32(psw), mpsid)
 			mpstab[mpsid] = &mpsinfo{listener: listener, ftype: 3, info: lip + "->" + rip + "psw:" + strconv.Itoa(psw), lip: lip, rip: rip, psw: psw, id: mpsid, running: true}
 			mpstab[mpsid].ptop()
 			fmt.Print(list())
@@ -461,7 +455,6 @@ func inputer() { //cmd交互界面
 			}
 			fmt.Println("MPS服务开启:", lip)
 			mpsid++
-			//go mpssvr(listener, mpsid)
 			mpstab[mpsid] = &mpsinfo{lip: lip, listener: listener, ftype: 5, info: " MPS服务: " + lip, id: mpsid, running: true}
 			mpstab[mpsid].mpssvr()
 			fmt.Print(list())
@@ -481,7 +474,6 @@ func inputer() { //cmd交互界面
 			fmt.Println(" MPS资源: ", lip, " 连接到: ", rip, " mpsname: ", mpsname)
 
 			mpsid++
-			//go mpssource(lip, rip, newticker, mpsid)
 			mpstab[mpsid] = &mpsinfo{lip: lip, rip: rip, ftype: 6, info: " MPS资源: " + lip + " 连接到: " + rip + " mpsname: " + mpsname, id: mpsid, running: true, mpsname: mpsname}
 			mpstab[mpsid].mpssource()
 			fmt.Print(list())
@@ -505,7 +497,6 @@ func inputer() { //cmd交互界面
 			}
 			fmt.Println("MPS用户开启:", lip, "mpsname:", mpsname)
 			mpsid++
-			//go mpsuser(listener, rip, mpsid)
 			mpstab[mpsid] = &mpsinfo{lip: lip, rip: rip, listener: listener, ftype: 7, info: " MPS用户: " + lip + " 连接到: " + rip + " mpsname: " + mpsname, id: mpsid, running: true, mpsname: mpsname}
 			mpstab[mpsid].mpsuser()
 			fmt.Print(list())
@@ -553,7 +544,6 @@ func inputer() { //cmd交互界面
 			}
 			fmt.Println("TelSvr服务开启:", lip)
 			mpsid++
-			//go telsvr(listener, mpsid)
 			mpstab[mpsid] = &mpsinfo{lip: lip, listener: listener, ftype: 10, info: " TelSvr服务: " + lip, id: mpsid, running: true}
 			mpstab[mpsid].telsvr()
 			fmt.Print(list())
@@ -683,7 +673,6 @@ func telsvr2(conn net.Conn) {
 			}
 			conn.Write([]byte(fmt.Sprintln("socks代理开启:", lip)))
 			mpsid++
-			//go socks45(listener, mpsid)
 			mpstab[mpsid] = &mpsinfo{lip: lip, listener: listener, ftype: 4, info: " socks代理: " + lip, id: mpsid}
 			mpstab[mpsid].socks45()
 			conn.Write([]byte(list()))
@@ -699,7 +688,6 @@ func telsvr2(conn net.Conn) {
 			}
 			conn.Write([]byte(fmt.Sprintln("MPS服务开启:", lip)))
 			mpsid++
-			//go mpssvr(listener, mpsid)
 			mpstab[mpsid] = &mpsinfo{lip: lip, listener: listener, ftype: 5, info: " MPS服务: " + lip, id: mpsid}
 			mpstab[mpsid].mpssvr()
 			conn.Write([]byte(list()))
@@ -859,7 +847,6 @@ func loadini() {
 			}
 			fmt.Println("端口转发开始监听:", lip)
 			mpsid++
-			//go ptop(listener, rip, int32(psw), mpsid)
 			mpstab[mpsid] = &mpsinfo{listener: listener, ftype: 3, info: lip + "->" + rip + " psw: " + strconv.Itoa(psw), lip: lip, rip: rip, psw: psw, id: mpsid, running: true}
 			mpstab[mpsid].ptop()
 
@@ -873,7 +860,6 @@ func loadini() {
 			}
 			fmt.Println("socks代理开启:", lip)
 			mpsid++
-			//go socks45(listener, mpsid)
 			mpstab[mpsid] = &mpsinfo{lip: lip, listener: listener, ftype: 4, info: " socks代理: " + lip, id: mpsid, running: true}
 			mpstab[mpsid].socks45()
 		case "5":
@@ -900,7 +886,6 @@ func loadini() {
 			fmt.Println("MPS资源:", lip, "连接到:", rip, "mpsname:", mpsname)
 
 			mpsid++
-			//go mpssource(lip, rip, newticker, mpsid)
 			mpstab[mpsid] = &mpsinfo{lip: lip, rip: rip, ftype: 6, info: " MPS资源: " + lip + " 连接到: " + rip + " mpsname: " + mpsname, id: mpsid, running: true, mpsname: mpsname}
 			mpstab[mpsid].mpssource()
 
@@ -918,7 +903,6 @@ func loadini() {
 			}
 			fmt.Println("MPS用户开启:", lip, "mpsname:", mpsname)
 			mpsid++
-			//go mpsuser(listener, rip, mpsid)
 			mpstab[mpsid] = &mpsinfo{lip: lip, rip: rip, listener: listener, ftype: 7, info: " MPS用户: " + lip + " 连接到: " + rip + " mpsname: " + mpsname, id: mpsid, running: true, mpsname: mpsname}
 			mpstab[mpsid].mpsuser()
 		case "10":
@@ -932,7 +916,6 @@ func loadini() {
 			}
 			fmt.Println("Telsvr服务开启:", lip)
 			mpsid++
-			//go telsvr(listener, mpsid)
 			mpstab[mpsid] = &mpsinfo{lip: lip, listener: listener, ftype: 10, info: " Telsvr服务: " + lip, id: mpsid, running: true}
 			mpstab[mpsid].telsvr()
 		}
@@ -984,13 +967,10 @@ func (this *mpsinfo) ptop() { //端口转发服务
 		for notquit && this.running {
 			conn, err := this.listener.Accept() //接受连接
 			if err != nil {
-				//fmt.Println("Error accept:" + err.Error())
 				return
 			}
-			//fmt.Println(lip, "Accepted the Connection :", conn.RemoteAddr())
 			go ptop2(conn, this.rip, this.psw)
 		}
-		//return true
 	}()
 }
 
@@ -1000,7 +980,6 @@ func s5(conn net.Conn, n int) {
 	bufab := make([]byte, RECV_BUF_LEN)
 	n, err := conn.Write([]byte{5, 0})
 	if err != nil {
-		//fmt.Println("S5应答错误4：" + err.Error())
 		conn.Close()
 		return
 	}
@@ -1022,7 +1001,6 @@ func s5(conn net.Conn, n int) {
 			strconv.Itoa(int(bufab[9])+int(bufab[8])*256))
 		conn2, err := net.DialTimeout("tcp", ip.String(), DialTO)
 		if err != nil {
-			//fmt.Println("S5 连接错误5：" + err.Error())
 			bufab[1] = 3
 			conn.Write(bufab[0:n])
 			conn.Close()
