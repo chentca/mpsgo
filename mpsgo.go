@@ -1,5 +1,5 @@
 package main
-
+//ver  v3.1.1 2016.3.20
 import (
 	"bufio"
 	"bytes"
@@ -46,9 +46,11 @@ var spd1, spd10, spd60 int64 = 0, 0, 0
 var req chan int
 var abnumad chan bool
 
+//var bufreq chan *[]byte = make(chan *[]byte, bufmax)
 var mpstab map[int]*mpsinfo
 var mpssvrtab map[string]*map[string]*[]net.Conn
 
+//var bufab []byte = make([]byte, RECV_BUF_LEN)
 
 type mpsinfo struct { //mps信息记录
 	info, lip, rip, mpsname string
@@ -224,7 +226,6 @@ func hand(source, user *[]net.Conn) { //撮合资源和用户连接
 	conn.Write(ok)
 	conn2.Write(ok)
 
-	//fmt.Println("握手成功！")
 	go Atob(conn, conn2, 0)
 	go Atob(conn2, conn, 0)
 
@@ -233,7 +234,7 @@ func hand(source, user *[]net.Conn) { //撮合资源和用户连接
 func mpssvr2(conn net.Conn) {
 	defer recover()
 	var bufab = make([]byte, RECV_BUF_LEN)
-	conn.SetReadDeadline(time.Now().Add(time.Second * 3))
+	conn.SetReadDeadline(time.Now().Add(CONNTO_MAX))
 	n, err := conn.Read(bufab)
 	if err != nil {
 		conn.Close()
@@ -312,7 +313,9 @@ func (this *mpsinfo) mpssvr() { //mps中转服务
 
 func list() string { //显示mps列表信息
 	var str string = "\r\n"
+	//fmt.Println("")
 	for key, info := range mpstab {
+		//fmt.Println(key, info.info)
 		str += fmt.Sprint(" ", key, " ", info.info, "\r\n")
 	}
 	if autorun == "1" {
@@ -337,7 +340,7 @@ func telsvrinputer(str1 string, conn net.Conn) string { //命令行交互
 		n, err := conn.Read(buf)
 
 		if n == 0 || err != nil {
-			return "err"
+			return string(quitcode)
 		}
 		if buf[0] == 10 {
 			continue
@@ -347,6 +350,11 @@ func telsvrinputer(str1 string, conn net.Conn) string { //命令行交互
 				return str
 			} else {
 				return " "
+			}
+		}
+		if buf[0] == 8 {
+			if len(str) > 0 {
+				str = str[0 : len(str)-1]
 			}
 		}
 		str += string(buf[0])
@@ -596,7 +604,7 @@ func telsvr2(conn net.Conn) {
 	for notquit {
 		inpstr = telsvrinputer("input str:", conn)
 		dbg(inpstr)
-		if inpstr == "err" {
+		if inpstr[0] == 1 {
 			conn.Close()
 			return
 		}
@@ -1109,7 +1117,7 @@ func Atob(conn, conn2 net.Conn, psw int) { //数据转发
 		}
 		if pswa != 0 {
 			for i := 0; i < n; i++ {
-				(bufab)[i] ^= pswa
+				bufab[i] ^= pswa
 			}
 		}
 		n, err = conn2.Write(bufab[0:n])
