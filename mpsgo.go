@@ -34,7 +34,7 @@ const strlist1 = `
 t:Telnet服务,Telnet
 `
 
-var dbgflag bool = true
+var dbgflag bool = false
 var Numcpu int = runtime.NumCPU()
 var mpsini os.File
 var autorun = "0"
