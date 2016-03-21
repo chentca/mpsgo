@@ -1,6 +1,6 @@
 package main
 
-//ver 3.1.1 2016.3.20
+//ver 3.1.2 2016.3.21
 import (
 	"bufio"
 	"bytes"
@@ -44,12 +44,13 @@ var notquit bool = true
 var mpsid, abnum int = 0, 0
 var reads int64 = 0
 var spd1, spd10, spd60 int64 = 0, 0, 0
-var req chan int
-var abnumad chan bool
+var req chan int = make(chan int, Numcpu)       //统计转发数量
+var abnumad chan bool = make(chan bool, Numcpu) //统计转发线程数量
 
 //var bufreq chan *[]byte = make(chan *[]byte, bufmax)
-var mpstab map[int]*mpsinfo
-var mpssvrtab map[string]*map[string]*[]net.Conn
+var mpstab map[int]*mpsinfo = make(map[int]*mpsinfo)
+var mpssvrtab map[string]*map[string]*[]net.Conn = make(map[string]*map[string]*[]net.Conn)
+var mpsdone map[string]int = make(map[string]int)
 
 //var bufab []byte = make([]byte, RECV_BUF_LEN)
 
@@ -66,10 +67,6 @@ func main() {
 	var n int
 	var spdn int64 = 0
 	runtime.GOMAXPROCS(Numcpu)
-	req = make(chan int, Numcpu)      //统计转发数量
-	abnumad = make(chan bool, Numcpu) //统计转发线程数量
-	mpstab = make(map[int]*mpsinfo)
-	mpssvrtab = make(map[string]*map[string]*[]net.Conn)
 
 	ini, err := os.OpenFile("mpsgo.ini", os.O_RDWR|os.O_CREATE, 0666)
 	if err != nil {
@@ -210,7 +207,7 @@ func (this *mpsinfo) mpsuser() { //mps资源使用者
 	}()
 }
 
-func hand(source, user *[]net.Conn) { //撮合资源和用户连接
+func hand(source, user *[]net.Conn, mpsname string) { //撮合资源和用户连接
 	defer recover()
 	var conn = (*source)[0]
 	var conn2 = (*user)[0]
@@ -230,6 +227,7 @@ func hand(source, user *[]net.Conn) { //撮合资源和用户连接
 	go Atob(conn, conn2, 0)
 	go Atob(conn2, conn, 0)
 
+	mpsdone[mpsname]++
 }
 
 func mpssvr2(conn net.Conn) {
@@ -263,7 +261,7 @@ func mpssvr2(conn net.Conn) {
 		if len(*user) == 0 {
 			return
 		}
-		hand(source, user)
+		hand(source, user, mpsname)
 	case 2: //user
 
 		if mpssvrtab[mpsname] == nil {
@@ -284,7 +282,7 @@ func mpssvr2(conn net.Conn) {
 		if len(*source) == 0 {
 			return
 		}
-		hand(source, user)
+		hand(source, user, mpsname)
 
 	default:
 		conn.Close()
@@ -583,7 +581,7 @@ func state() string {
 	str += fmt.Sprint(" NumCPU: ", Numcpu, " 转发纤程: ", abnum, "\r\n")
 	str += fmt.Sprint(" 转发数据: ", reads, "速度：秒-10秒-分钟 ", spd1, spd10, spd60, "\r\n")
 	for k, v := range mpssvrtab {
-		str += fmt.Sprint("mpsname:", k, " 资源:", strconv.Itoa(len(*(*v)["s"])), " 用户:", strconv.Itoa(len(*(*v)["u"])), "\r\n")
+		str += fmt.Sprint("mpsname:", k, " 资源:", strconv.Itoa(len(*(*v)["s"])), " 用户:", strconv.Itoa(len(*(*v)["u"])), " 对接:", mpsdone[k], "\r\n")
 	}
 	return str
 }
