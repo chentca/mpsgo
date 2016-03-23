@@ -1,6 +1,6 @@
 package main
 
-//ver 3.1.2 2016.3.21
+//ver 3.2 2016.3.23
 import (
 	"bufio"
 	"bytes"
@@ -31,6 +31,8 @@ const strlist1 = `
 7:远程端口用户,MPS user
 8:运行状态信息,info
 9:设置,set
+r:资源中继,MPS source relay
+b:资源桥,MPS source bridge
 t:Telnet服务,Telnet
 `
 
@@ -115,7 +117,7 @@ func main() {
 
 }
 
-func mpsticker(this *mpsinfo) { //定期更新mps的资源
+func mpsticker(this *mpsinfo) { //mps的资源
 	if this.running != true {
 		fmt.Println("MPS资源退出:", this.info)
 		return
@@ -136,11 +138,11 @@ func mpsticker(this *mpsinfo) { //定期更新mps的资源
 	_, err = conn.Write(append([]byte{1}, []byte(this.mpsname)...)) //type source
 	conn.SetReadDeadline(time.Now().Add(CONNTO_MAX))
 	_, err = conn.Read(buf)
+	if this.running {
+		go mpsticker(this)
+	}
 	if buf[0] != 0 {
 		conn.Close()
-		if this.running {
-			go mpsticker(this)
-		}
 		return
 	}
 	conn2, err := net.DialTimeout("tcp", this.lip, DialTO)
@@ -151,13 +153,175 @@ func mpsticker(this *mpsinfo) { //定期更新mps的资源
 		conn.Close()
 		conn2.Close()
 	}
-	if this.running {
-		go mpsticker(this)
+
+}
+
+func mpssvr21(conn net.Conn, mpsname string) { //资源握手判断
+	if mpssvrtab[mpsname] == nil {
+		source := new([]net.Conn)
+		user := new([]net.Conn)
+		mpssvrtab[mpsname] = &map[string]*([]net.Conn){"s": source, "u": user}
 	}
+	a := *mpssvrtab[mpsname]
+	source := a["s"]
+	user := a["u"]
+	*source = append(*source, conn)
+	if len(*source) > 1 {
+		conn = (*source)[0]
+		*source = (*source)[1:]
+		conn.Write(quitcode)
+		conn.Close()
+	}
+	if len(*user) > 0 {
+		hand(source, user, mpsname)
+	}
+}
+
+func mpssvr22(conn net.Conn, mpsname string) { //用户握手判断
+	if mpssvrtab[mpsname] == nil {
+		source := new([]net.Conn)
+		user := new([]net.Conn)
+		mpssvrtab[mpsname] = &map[string]*([]net.Conn){"s": source, "u": user}
+	}
+	a := *mpssvrtab[mpsname]
+	source := a["s"]
+	user := a["u"]
+	*user = append(*user, conn)
+	if len(*user) > 60 {
+		conn = (*user)[0]
+		*user = (*user)[1:]
+		conn.Write(quitcode)
+		conn.Close()
+	}
+	if len(*source) > 0 {
+		hand(source, user, mpsname)
+	}
+}
+
+func mpsrelay2(this *mpsinfo) { //当作mps的资源
+	if this.running != true {
+		fmt.Println("MPS资源中继退出:", this.info)
+		return
+	}
+	buf := make([]byte, 1)
+	conn, err := net.DialTimeout("tcp", this.rip, DialTO) //发出资源
+	dbg("send source:", this.info)
+	if err != nil {
+		after := time.After(DialTO)
+		select {
+		case <-after:
+		}
+		if this.running {
+			go mpsrelay2(this)
+		}
+		return
+	}
+	_, err = conn.Write(append([]byte{1}, []byte(this.mpsname)...)) //type source
+	conn.SetReadDeadline(time.Now().Add(CONNTO_MAX))
+	_, err = conn.Read(buf)
+	if this.running {
+		go mpsrelay2(this)
+	}
+	if buf[0] != 0 {
+		conn.Close()
+		return
+	}
+
+	//当作用户判断握手
+	if mpssvrtab[this.mpsname] == nil {
+		source := new([]net.Conn)
+		user := new([]net.Conn)
+		mpssvrtab[this.mpsname] = &map[string]*([]net.Conn){"s": source, "u": user}
+	}
+	a := *mpssvrtab[this.mpsname]
+	source := a["s"]
+
+	if len(*source) > 0 {
+		var conn2 = (*source)[0]
+		if len(*source) == 1 {
+			*source = []net.Conn{}
+		} else {
+			*source = (*source)[1:]
+		}
+		conn2.Write(ok)
+		go Atob(conn, conn2, 0)
+		go Atob(conn2, conn, 0)
+
+		mpsdone[this.mpsname]++
+	} else {
+		conn.Write(quitcode)
+		conn.Close()
+	}
+
+}
+
+func mpsbridge2(this *mpsinfo) { //当作mps的资源
+	if this.running != true {
+		fmt.Println("MPS资源中继退出:", this.info)
+		return
+	}
+	buf := make([]byte, 1)
+	conn, err := net.DialTimeout("tcp", this.lip, DialTO) //发出资源
+	dbg("send source:", this.info)
+	if err != nil {
+		after := time.After(DialTO)
+		select {
+		case <-after:
+		}
+		if this.running {
+			go mpsbridge2(this)
+		}
+		return
+	}
+	_, err = conn.Write(append([]byte{1}, []byte(this.mpsname)...)) //type source
+	conn.SetReadDeadline(time.Now().Add(CONNTO_MAX))
+	_, err = conn.Read(buf)
+	if this.running {
+		go mpsbridge2(this)
+	}
+	if buf[0] != 0 {
+		conn.Close()
+		return
+	}
+
+	//与下级用户发起对接
+	conn2, err := net.DialTimeout("tcp", this.rip, DialTO)
+	if err != nil {
+		conn.Close()
+		//delay 5
+		return
+	}
+	_, err = conn2.Write(append([]byte{2}, []byte(this.mpsname)...)) //type user
+	if err != nil {
+		conn.Close()
+		conn2.Close()
+		return
+	}
+	conn2.SetReadDeadline(time.Now().Add(CONNTO_MAX))
+	_, err = conn2.Read(buf)
+	if err != nil || buf[0] != 0 {
+		conn.Close()
+		conn2.Close()
+		return
+	}
+
+	go Atob(conn, conn2, 0)
+	go Atob(conn2, conn, 0)
+
+	mpsdone[this.mpsname]++
+
 }
 
 func (this *mpsinfo) mpssource() { //mps资源提供
 	go mpsticker(this)
+}
+
+func (this *mpsinfo) mpsrelay() { //mps资源中继
+	go mpsrelay2(this)
+}
+
+func (this *mpsinfo) mpsbridge() { //mps资源中继
+	go mpsbridge2(this)
 }
 
 func mpsuser2(conn net.Conn, this *mpsinfo) {
@@ -184,7 +348,6 @@ func mpsuser2(conn net.Conn, this *mpsinfo) {
 		conn2.Close()
 		return
 	}
-
 	go Atob(conn, conn2, int(this.mpsname[0]))
 	go Atob(conn2, conn, int(this.mpsname[0]))
 
@@ -242,47 +405,10 @@ func mpssvr2(conn net.Conn) {
 	mpsname := string(bufab[1:n])
 	switch bufab[0] { //第一次握手
 	case 1: //source
+		mpssvr21(conn, mpsname)
 
-		if mpssvrtab[mpsname] == nil {
-			source := new([]net.Conn)
-			user := new([]net.Conn)
-			mpssvrtab[mpsname] = &map[string]*([]net.Conn){"s": source, "u": user}
-		}
-		a := *mpssvrtab[mpsname]
-		source := a["s"]
-		user := a["u"]
-		*source = append(*source, conn)
-		if len(*source) > 1 {
-			conn = (*source)[0]
-			*source = (*source)[1:]
-			conn.Write(quitcode)
-			conn.Close()
-		}
-		if len(*user) == 0 {
-			return
-		}
-		hand(source, user, mpsname)
 	case 2: //user
-
-		if mpssvrtab[mpsname] == nil {
-			source := new([]net.Conn)
-			user := new([]net.Conn)
-			mpssvrtab[mpsname] = &map[string]*([]net.Conn){"s": source, "u": user}
-		}
-		a := *mpssvrtab[mpsname]
-		source := a["s"]
-		user := a["u"]
-		*user = append(*user, conn)
-		if len(*user) > 60 {
-			conn = (*user)[0]
-			*user = (*user)[1:]
-			conn.Write(quitcode)
-			conn.Close()
-		}
-		if len(*source) == 0 {
-			return
-		}
-		hand(source, user, mpsname)
+		mpssvr22(conn, mpsname)
 
 	default:
 		conn.Close()
@@ -325,7 +451,7 @@ func strinputer(str string) string { //命令行交互
 }
 
 func telsvrinputer(str1 string, conn net.Conn) string { //命令行交互
-	conn.Write([]byte(str1 + "\n\r"))
+	conn.Write([]byte(str1 + "\r\n"))
 	buf := make([]byte, 1)
 	var str string = ""
 	for {
@@ -420,10 +546,10 @@ func inputer() { //cmd交互界面
 				fmt.Println("添加端口转发失败:" + err.Error())
 				continue
 			}
-			fmt.Println("端口转发开始监听:", lip)
 			mpsid++
 			mpstab[mpsid] = &mpsinfo{listener: listener, ftype: 3, info: lip + "->" + rip + "psw:" + strconv.Itoa(psw), lip: lip, rip: rip, psw: psw, id: mpsid, running: true}
 			mpstab[mpsid].ptop()
+			fmt.Println(mpstab[mpsid].info)
 			fmt.Print(list())
 		case "4": //socks
 			lip := strinputer("请输入socks代理端口(如：127.0.0.1:8080 或 0.0.0.0:8080)*取消:")
@@ -435,11 +561,11 @@ func inputer() { //cmd交互界面
 				fmt.Println("添加socks代理失败:" + err.Error())
 				continue
 			}
-			fmt.Println("socks代理开启:", lip)
 			mpsid++
 			//go socks45(listener, mpsid)
 			mpstab[mpsid] = &mpsinfo{lip: lip, listener: listener, ftype: 4, info: " socks代理: " + lip, id: mpsid, running: true}
 			mpstab[mpsid].socks45()
+			fmt.Println(mpstab[mpsid].info)
 			fmt.Print(list())
 		case "5": //mps svr
 			lip := strinputer("请输入MPS服务端口(如：127.0.0.1:555 或 0.0.0.0:555)*取消:")
@@ -451,10 +577,10 @@ func inputer() { //cmd交互界面
 				fmt.Println("启动MPS服务失败:" + err.Error())
 				continue
 			}
-			fmt.Println("MPS服务开启:", lip)
 			mpsid++
 			mpstab[mpsid] = &mpsinfo{lip: lip, listener: listener, ftype: 5, info: " MPS服务: " + lip, id: mpsid, running: true}
 			mpstab[mpsid].mpssvr()
+			fmt.Println(mpstab[mpsid].info)
 			fmt.Print(list())
 		case "6": //mps sourse
 			lip := strinputer("请输入MPS资源端口(如：127.0.0.1:8080)*取消:")
@@ -469,11 +595,11 @@ func inputer() { //cmd交互界面
 			if mpsname == "*" || len(rip) == 0 {
 				continue
 			}
-			fmt.Println(" MPS资源: ", lip, " 连接到: ", rip, " mpsname: ", mpsname)
 
 			mpsid++
-			mpstab[mpsid] = &mpsinfo{lip: lip, rip: rip, ftype: 6, info: " MPS资源: " + lip + " 连接到: " + rip + " mpsname: " + mpsname, id: mpsid, running: true, mpsname: mpsname}
+			mpstab[mpsid] = &mpsinfo{lip: lip, rip: rip, ftype: 6, info: " MPS资源: " + lip + " mpsname:[" + mpsname + "]" + " 连接到: " + rip, id: mpsid, running: true, mpsname: mpsname}
 			mpstab[mpsid].mpssource()
+			fmt.Println(mpstab[mpsid].info)
 			fmt.Print(list())
 		case "7": //mps user
 			lip := strinputer("请输入MPS用户端口(如：127.0.0.1:8080 或 0.0.0.0:8080)*取消:")
@@ -493,16 +619,16 @@ func inputer() { //cmd交互界面
 			if mpsname == "*" || len(rip) == 0 {
 				continue
 			}
-			fmt.Println("MPS用户开启:", lip, "mpsname:", mpsname)
 			mpsid++
-			mpstab[mpsid] = &mpsinfo{lip: lip, rip: rip, listener: listener, ftype: 7, info: " MPS用户: " + lip + " 连接到: " + rip + " mpsname: " + mpsname, id: mpsid, running: true, mpsname: mpsname}
+			mpstab[mpsid] = &mpsinfo{lip: lip, rip: rip, listener: listener, ftype: 7, info: "MPS用户开启:" + lip + "mpsname:[" + mpsname + "]", id: mpsid, running: true, mpsname: mpsname}
 			mpstab[mpsid].mpsuser()
+			fmt.Println(mpstab[mpsid].info)
 			fmt.Print(list())
 
 		case "8": //status
 			fmt.Println(state())
 
-		case "9":
+		case "9": //set
 			var strtab = []string{"",
 				"1:切换运行状态（自动保存恢复配置/手动保存恢复配置）",
 				"2:读取配置并执行",
@@ -530,7 +656,7 @@ func inputer() { //cmd交互界面
 			default:
 				continue
 			}
-		case "t": //"t"
+		case "t": //Telnet Svr
 			lip := strinputer("请输入TelSvr服务端口(如：127.0.0.1:555 或 0.0.0.0:555)*取消:")
 			if lip == "*" || len(lip) == 0 {
 				continue
@@ -546,6 +672,40 @@ func inputer() { //cmd交互界面
 			mpstab[mpsid].telsvr()
 			fmt.Print(list())
 
+		case "r": //relay 资源中继
+			mpsname := strinputer("请输入需中继的MPS资源标识(如：socks5svr)*取消:")
+			if mpsname == "*" || len(mpsname) == 0 {
+				continue
+			}
+			rip := strinputer("请输入MPS服务端口(如：127.0.0.1:555)*取消:")
+			if rip == "*" || len(rip) == 0 {
+				continue
+			}
+			fmt.Println("MPS中继服务开启:", mpsname, rip)
+			mpsid++
+			mpstab[mpsid] = &mpsinfo{ftype: 11, lip: "0", info: " MPS中继服务:[" + mpsname + "]->" + rip, rip: rip, id: mpsid, mpsname: mpsname, running: true}
+			mpstab[mpsid].mpsrelay()
+			fmt.Print(list())
+
+		case "b": //bridge 资源桥
+			mpsname := strinputer("请输入需中继的MPS资源标识(如：socks5svr)*取消:")
+			if mpsname == "*" || len(mpsname) == 0 {
+				continue
+			}
+			rip := strinputer("请输入上级MPS服务端口(如：127.0.0.1:555)*取消:") //为了复用user函数，rip定义为上级地址
+			if rip == "*" || len(rip) == 0 {
+				continue
+			}
+			lip := strinputer("请输入下级MPS服务端口(如：127.0.0.1:555)*取消:")
+			if lip == "*" || len(lip) == 0 {
+				continue
+			}
+			fmt.Println("MPS服务桥开启:", mpsname, rip)
+			mpsid++
+			mpstab[mpsid] = &mpsinfo{ftype: 12, info: " MPS服务桥: " + rip + "[" + mpsname + "]->" + lip, lip: lip, rip: rip, id: mpsid, mpsname: mpsname, running: true}
+			mpstab[mpsid].mpsbridge()
+			fmt.Print(list())
+
 		default: //help
 			fmt.Print(strlist1)
 			inputstr = "0"
@@ -559,7 +719,7 @@ func (this *mpsinfo) telsvr() { //TelSvr服务
 		defer fmt.Println("TelSvr退出:", this.id)
 		defer delete(mpstab, this.id)
 		defer recover()
-		defer this.listener.Close()
+		//defer this.listener.Close()
 
 		for notquit && this.running {
 			conn, err := this.listener.Accept() //接受连接
@@ -706,7 +866,7 @@ func telsvr2(conn net.Conn) {
 
 			mpsid++
 			//go mpssource(lip, rip, newticker, mpsid)
-			mpstab[mpsid] = &mpsinfo{lip: lip, rip: rip, ftype: 6, info: " MPS资源: " + lip + " 连接到: " + rip, id: mpsid, mpsname: mpsname}
+			mpstab[mpsid] = &mpsinfo{lip: lip, rip: rip, ftype: 6, info: " MPS资源: " + lip + " mpsname:[" + mpsname + "]" + " 连接到: " + rip, id: mpsid, running: true, mpsname: mpsname}
 			mpstab[mpsid].mpssource()
 			conn.Write([]byte(list()))
 		case "7": //mps user
@@ -727,10 +887,8 @@ func telsvr2(conn net.Conn) {
 			if mpsname == "*" || len(rip) == 0 {
 				continue
 			}
-			conn.Write([]byte(fmt.Sprintln("MPS用户开启:", lip)))
 			mpsid++
-			//go mpsuser(listener, rip, mpsid)
-			mpstab[mpsid] = &mpsinfo{lip: lip, rip: rip, listener: listener, ftype: 7, info: " MPS用户: " + lip + " 连接到: " + rip, id: mpsid, mpsname: mpsname}
+			mpstab[mpsid] = &mpsinfo{lip: lip, rip: rip, listener: listener, ftype: 7, info: "MPS用户开启:" + lip + "mpsname:[" + mpsname + "]", id: mpsid, running: true, mpsname: mpsname}
 			mpstab[mpsid].mpsuser()
 			conn.Write([]byte(list()))
 
@@ -773,11 +931,32 @@ func telsvr2(conn net.Conn) {
 			conn.Write([]byte(fmt.Sprintln("TelSvr服务开启:", lip)))
 			mpsid++
 
-			mpstab[mpsid] = &mpsinfo{lip: lip, listener: listener, ftype: 10, info: " TelSvr服务: " + lip, id: mpsid}
+			mpstab[mpsid] = &mpsinfo{lip: lip, listener: listener, ftype: 10, info: " TelSvr服务: " + lip, id: mpsid, running: true}
 			conn.Write([]byte(list()))
 			mpstab[mpsid].telsvr()
+
+		case "11":
+			mpsname := telsvrinputer("请输入需中继的MPS资源标识(如：socks5svr)*取消:", conn)
+			rip := telsvrinputer("请输入MPS服务端口(如：127.0.0.1:555)*取消:", conn)
+			if rip == "*" || rip == " " {
+				continue
+			}
+			mpsid++
+			mpstab[mpsid] = &mpsinfo{ftype: 11, lip: "0", info: " MPS中继服务:[" + mpsname + "]->" + rip, rip: rip, id: mpsid, mpsname: mpsname, running: true}
+			mpstab[mpsid].mpsrelay()
+			conn.Write([]byte(list()))
+
+		case "12":
+			mpsname := telsvrinputer("请输入需中继的MPS资源标识(如：socks5svr)*取消:", conn)
+			rip := telsvrinputer("请输入上级MPS服务端口(如：127.0.0.1:555)*取消:", conn)
+			lip := telsvrinputer("请输入下级MPS服务端口(如：127.0.0.1:555)*取消:", conn)
+
+			mpsid++
+			mpstab[mpsid] = &mpsinfo{ftype: 12, info: " MPS服务桥: " + rip + "[" + mpsname + "]->" + lip, lip: lip, rip: rip, id: mpsid, mpsname: mpsname, running: true}
+			mpstab[mpsid].mpsbridge()
+
 		default: //help
-			var str string = strings.Replace(strlist1, "\n", "\n\r", -1)
+			var str string = strings.Replace(strlist1, "\n", "\r\n", -1)
 			conn.Write([]byte(str))
 		}
 
@@ -800,13 +979,13 @@ func saveini() { //保存配置
 	for _, v := range mpstab {
 		wstr(ini, strconv.Itoa(v.ftype))
 		wstr(ini, v.lip)
-		if v.ftype == 3 || v.ftype == 6 || v.ftype == 7 {
+		if v.ftype == 3 || v.ftype == 6 || v.ftype == 7 || v.ftype == 11 || v.ftype == 12 {
 			wstr(ini, v.rip)
 		}
 		if v.ftype == 3 {
 			wstr(ini, strconv.Itoa(v.psw))
 		}
-		if v.ftype == 6 || v.ftype == 7 {
+		if v.ftype == 6 || v.ftype == 7 || v.ftype == 11 || v.ftype == 12 {
 			wstr(ini, v.mpsname)
 		}
 	}
@@ -824,98 +1003,107 @@ func loadini() {
 	str, err := r.ReadString('\n')
 	autorun = strings.Trim(str, "\r\n")
 	for {
-		str, err = r.ReadString('\n')
-		str = strings.Trim(str, "\r\n")
+		str := iniloadln(r)
 		if str == "" || err == io.EOF {
 			break
 		}
 		switch str {
 		case "3":
-			str, err = r.ReadString('\n')
-			lip := strings.Trim(str, "\r\n")
-			str, err = r.ReadString('\n')
-			rip := strings.Trim(str, "\r\n")
-			str, err = r.ReadString('\n')
-			pswstr := strings.Trim(str, "\r\n")
+			lip := iniloadln(r)
+			rip := iniloadln(r)
+			pswstr := iniloadln(r)
 			psw, _ := strconv.Atoi(pswstr)
 			listener, err = net.Listen("tcp", lip) //侦听端口
 			if err != nil {
 				fmt.Println("添加端口转发失败:" + err.Error())
 				continue
 			}
-			fmt.Println("端口转发开始监听:", lip)
 			mpsid++
-			mpstab[mpsid] = &mpsinfo{listener: listener, ftype: 3, info: lip + "->" + rip + " psw: " + strconv.Itoa(psw), lip: lip, rip: rip, psw: psw, id: mpsid, running: true}
+			mpstab[mpsid] = &mpsinfo{listener: listener, ftype: 3, info: lip + "->" + rip + "psw:" + strconv.Itoa(psw), lip: lip, rip: rip, psw: psw, id: mpsid, running: true}
 			mpstab[mpsid].ptop()
+			fmt.Println(mpstab[mpsid].info)
 
 		case "4":
-			str, err = r.ReadString('\n')
-			lip := strings.Trim(str, "\r\n")
+			lip := iniloadln(r)
 			listener, err = net.Listen("tcp", lip)
 			if err != nil {
 				fmt.Println("添加socks代理失败:" + err.Error())
 				continue
 			}
-			fmt.Println("socks代理开启:", lip)
+
 			mpsid++
 			mpstab[mpsid] = &mpsinfo{lip: lip, listener: listener, ftype: 4, info: " socks代理: " + lip, id: mpsid, running: true}
 			mpstab[mpsid].socks45()
+			fmt.Println(mpstab[mpsid].info)
+
 		case "5":
-			str, err = r.ReadString('\n')
-			lip := strings.Trim(str, "\r\n")
+			lip := iniloadln(r)
 
 			listener, err = net.Listen("tcp", lip)
 			if err != nil {
 				fmt.Println("启动MPS服务失败:" + err.Error())
 				continue
 			}
-			fmt.Println("MPS服务开启:", lip)
 			mpsid++
-			//go mpssvr(listener, mpsid)
 			mpstab[mpsid] = &mpsinfo{lip: lip, listener: listener, ftype: 5, info: " MPS服务: " + lip, id: mpsid, running: true}
 			mpstab[mpsid].mpssvr()
-		case "6":
-			str, err = r.ReadString('\n')
-			lip := strings.Trim(str, "\r\n")
-			str, err = r.ReadString('\n')
-			rip := strings.Trim(str, "\r\n")
-			str, err = r.ReadString('\n')
-			mpsname := strings.Trim(str, "\r\n")
-			fmt.Println("MPS资源:", lip, "连接到:", rip, "mpsname:", mpsname)
+			fmt.Println(mpstab[mpsid].info)
 
+		case "6":
+			lip := iniloadln(r)
+			rip := iniloadln(r)
+			mpsname := iniloadln(r)
 			mpsid++
-			mpstab[mpsid] = &mpsinfo{lip: lip, rip: rip, ftype: 6, info: " MPS资源: " + lip + " 连接到: " + rip + " mpsname: " + mpsname, id: mpsid, running: true, mpsname: mpsname}
+			mpstab[mpsid] = &mpsinfo{lip: lip, rip: rip, ftype: 6, info: " MPS资源: " + lip + " mpsname:[" + mpsname + "]" + " 连接到: " + rip, id: mpsid, running: true, mpsname: mpsname}
 			mpstab[mpsid].mpssource()
+			fmt.Println(mpstab[mpsid].info)
 
 		case "7":
-			str, err = r.ReadString('\n')
-			lip := strings.Trim(str, "\r\n")
-			str, err = r.ReadString('\n')
-			rip := strings.Trim(str, "\r\n")
-			str, err = r.ReadString('\n')
-			mpsname := strings.Trim(str, "\r\n")
+			lip := iniloadln(r)
+			rip := iniloadln(r)
+
+			mpsname := iniloadln(r)
 			listener, err = net.Listen("tcp", lip)
 			if err != nil {
 				fmt.Println("启动MPS用户失败:" + err.Error())
 				continue
 			}
-			fmt.Println("MPS用户开启:", lip, "mpsname:", mpsname)
 			mpsid++
-			mpstab[mpsid] = &mpsinfo{lip: lip, rip: rip, listener: listener, ftype: 7, info: " MPS用户: " + lip + " 连接到: " + rip + " mpsname: " + mpsname, id: mpsid, running: true, mpsname: mpsname}
+			mpstab[mpsid] = &mpsinfo{lip: lip, rip: rip, listener: listener, ftype: 7, info: "MPS用户开启:" + lip + "mpsname:[" + mpsname + "]", id: mpsid, running: true, mpsname: mpsname}
 			mpstab[mpsid].mpsuser()
-		case "10":
-			str, err = r.ReadString('\n')
-			lip := strings.Trim(str, "\r\n")
+			fmt.Println(mpstab[mpsid].info)
 
+		case "10":
+			lip := iniloadln(r)
 			listener, err = net.Listen("tcp", lip)
 			if err != nil {
 				fmt.Println("启动Telsvr服务失败:" + err.Error())
 				continue
 			}
-			fmt.Println("Telsvr服务开启:", lip)
 			mpsid++
-			mpstab[mpsid] = &mpsinfo{lip: lip, listener: listener, ftype: 10, info: " Telsvr服务: " + lip, id: mpsid, running: true}
+			mpstab[mpsid] = &mpsinfo{lip: lip, listener: listener, ftype: 10, info: " TelSvr服务: " + lip, id: mpsid, running: true}
 			mpstab[mpsid].telsvr()
+			fmt.Println(mpstab[mpsid].info)
+
+		case "11":
+			_ = iniloadln(r)
+			rip := iniloadln(r)
+			mpsname := iniloadln(r)
+
+			mpsid++
+			mpstab[mpsid] = &mpsinfo{ftype: 11, lip: "0", info: " MPS中继服务:[" + mpsname + "]->" + rip, rip: rip, id: mpsid, mpsname: mpsname, running: true}
+			mpstab[mpsid].mpsrelay()
+			fmt.Println(mpstab[mpsid].info)
+
+		case "12":
+			lip := iniloadln(r)
+			rip := iniloadln(r)
+			mpsname := iniloadln(r)
+
+			mpsid++
+			mpstab[mpsid] = &mpsinfo{ftype: 12, info: " MPS服务桥: " + rip + "[" + mpsname + "]->" + lip, lip: lip, rip: rip, id: mpsid, mpsname: mpsname, running: true}
+			mpstab[mpsid].mpsbridge()
+			fmt.Println(mpstab[mpsid].info)
 		}
 	}
 	fmt.Print(list())
@@ -960,7 +1148,7 @@ func (this *mpsinfo) ptop() { //端口转发服务
 		defer fmt.Println("端口转发退出:", this.rip)
 		defer delete(mpstab, this.id)
 		defer recover()
-		defer this.listener.Close()
+		//defer this.listener.Close()
 
 		for notquit && this.running {
 			conn, err := this.listener.Accept() //接受连接
@@ -1072,6 +1260,12 @@ func (this *mpsinfo) socks45() {
 	}()
 }
 
+func iniloadln(r *bufio.Reader) string {
+	str, _ := r.ReadString('\n')
+	str = strings.Trim(str, "\r\n")
+	return str
+}
+
 func Atob(conn, conn2 net.Conn, psw int) { //数据转发
 	bufab := make([]byte, RECV_BUF_LEN)
 	defer recover()
@@ -1083,6 +1277,9 @@ func Atob(conn, conn2 net.Conn, psw int) { //数据转发
 
 	abnumad <- true
 	pswa := byte(psw)
+	if psw > 0 && pswa == 0 {
+		pswa = 21
+	}
 	for notquit {
 
 		conn.SetDeadline(time.Now().Add(CONNTO_MAX))
