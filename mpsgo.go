@@ -1,6 +1,6 @@
 package main
 
-//ver 3.2 2016.3.23
+//ver 3.2.1 2016.3.24
 import (
 	"bufio"
 	"bytes"
@@ -57,10 +57,10 @@ var mpsdone map[string]int = make(map[string]int)
 //var bufab []byte = make([]byte, RECV_BUF_LEN)
 
 type mpsinfo struct { //mps信息记录
-	info, lip, rip, mpsname string
-	ftype, psw, id          int
-	listener                net.Listener
-	running                 bool
+	info, lip, rip, mpsname, psw string
+	ftype, id                    int
+	listener                     net.Listener
+	running                      bool
 }
 
 func main() {
@@ -147,8 +147,8 @@ func mpsticker(this *mpsinfo) { //mps的资源
 	}
 	conn2, err := net.DialTimeout("tcp", this.lip, DialTO)
 	if err == nil {
-		go Atob(conn, conn2, int(this.mpsname[0]))
-		go Atob(conn2, conn, int(this.mpsname[0]))
+		go Atob(conn, conn2, this.mpsname)
+		go Atob(conn2, conn, this.mpsname)
 	} else {
 		conn.Close()
 		conn2.Close()
@@ -244,8 +244,8 @@ func mpsrelay2(this *mpsinfo) { //当作mps的资源
 			*source = (*source)[1:]
 		}
 		conn2.Write(ok)
-		go Atob(conn, conn2, 0)
-		go Atob(conn2, conn, 0)
+		go Atob(conn, conn2, "")
+		go Atob(conn2, conn, "")
 
 		mpsdone[this.mpsname]++
 	} else {
@@ -305,8 +305,8 @@ func mpsbridge2(this *mpsinfo) { //当作mps的资源
 		return
 	}
 
-	go Atob(conn, conn2, 0)
-	go Atob(conn2, conn, 0)
+	go Atob(conn, conn2, "")
+	go Atob(conn2, conn, "")
 
 	mpsdone[this.mpsname]++
 
@@ -348,8 +348,8 @@ func mpsuser2(conn net.Conn, this *mpsinfo) {
 		conn2.Close()
 		return
 	}
-	go Atob(conn, conn2, int(this.mpsname[0]))
-	go Atob(conn2, conn, int(this.mpsname[0]))
+	go Atob(conn, conn2, this.mpsname)
+	go Atob(conn2, conn, this.mpsname)
 
 }
 
@@ -387,8 +387,8 @@ func hand(source, user *[]net.Conn, mpsname string) { //撮合资源和用户连
 	conn.Write(ok)
 	conn2.Write(ok)
 
-	go Atob(conn, conn2, 0)
-	go Atob(conn2, conn, 0)
+	go Atob(conn, conn2, "")
+	go Atob(conn2, conn, "")
 
 	mpsdone[mpsname]++
 }
@@ -535,19 +535,19 @@ func inputer() { //cmd交互界面
 			if rip == "*" || len(rip) == 0 {
 				continue
 			}
-			pswstr := strinputer("转发密码或干扰码(密码小于:2,147,483,647 默认为0不加密)*取消:")
+			psw := strinputer("转发密码或干扰码(密码小于:2,147,483,647 默认为0不加密)*取消:")
 
-			if pswstr == "*" {
+			if psw == "*" {
 				continue
 			}
-			psw, _ := strconv.Atoi(pswstr)
+
 			var listener, err = net.Listen("tcp", lip) //侦听端口
 			if err != nil {
 				fmt.Println("添加端口转发失败:" + err.Error())
 				continue
 			}
 			mpsid++
-			mpstab[mpsid] = &mpsinfo{listener: listener, ftype: 3, info: lip + "->" + rip + "psw:" + strconv.Itoa(psw), lip: lip, rip: rip, psw: psw, id: mpsid, running: true}
+			mpstab[mpsid] = &mpsinfo{listener: listener, ftype: 3, info: lip + "->" + rip + "psw:" + psw, lip: lip, rip: rip, psw: psw, id: mpsid, running: true}
 			mpstab[mpsid].ptop()
 			fmt.Println(mpstab[mpsid].info)
 			fmt.Print(list())
@@ -802,12 +802,12 @@ func telsvr2(conn net.Conn) {
 			if rip == "*" || rip == " " {
 				continue
 			}
-			pswstr := telsvrinputer("转发密码或干扰码(密码小于:2,147,483,647 默认为0不加密)*取消:", conn)
+			psw := telsvrinputer("转发密码或干扰码(密码小于:2,147,483,647 默认为0不加密)*取消:", conn)
 
-			if pswstr == "*" {
+			if psw == "*" {
 				continue
 			}
-			psw, _ := strconv.Atoi(pswstr)
+
 			var listener, err = net.Listen("tcp", lip) //侦听端口
 			if err != nil {
 				conn.Write([]byte(fmt.Sprintln("添加端口转发失败:" + err.Error())))
@@ -816,7 +816,7 @@ func telsvr2(conn net.Conn) {
 			conn.Write([]byte(fmt.Sprintln("端口转发开始监听:", lip)))
 			mpsid++
 			//go ptop(listener, rip, int32(psw), mpsid)
-			mpstab[mpsid] = &mpsinfo{listener: listener, ftype: 3, info: lip + "->" + rip + "psw:" + strconv.Itoa(psw), lip: lip, rip: rip, psw: psw, id: mpsid}
+			mpstab[mpsid] = &mpsinfo{listener: listener, ftype: 3, info: lip + "->" + rip + "psw:" + psw, lip: lip, rip: rip, psw: psw, id: mpsid}
 			mpstab[mpsid].ptop()
 			conn.Write([]byte(list()))
 		case "4": //socks5
@@ -983,7 +983,7 @@ func saveini() { //保存配置
 			wstr(ini, v.rip)
 		}
 		if v.ftype == 3 {
-			wstr(ini, strconv.Itoa(v.psw))
+			wstr(ini, v.psw)
 		}
 		if v.ftype == 6 || v.ftype == 7 || v.ftype == 11 || v.ftype == 12 {
 			wstr(ini, v.mpsname)
@@ -1011,15 +1011,15 @@ func loadini() {
 		case "3":
 			lip := iniloadln(r)
 			rip := iniloadln(r)
-			pswstr := iniloadln(r)
-			psw, _ := strconv.Atoi(pswstr)
+			psw := iniloadln(r)
+
 			listener, err = net.Listen("tcp", lip) //侦听端口
 			if err != nil {
 				fmt.Println("添加端口转发失败:" + err.Error())
 				continue
 			}
 			mpsid++
-			mpstab[mpsid] = &mpsinfo{listener: listener, ftype: 3, info: lip + "->" + rip + "psw:" + strconv.Itoa(psw), lip: lip, rip: rip, psw: psw, id: mpsid, running: true}
+			mpstab[mpsid] = &mpsinfo{listener: listener, ftype: 3, info: lip + "->" + rip + "psw:" + psw, lip: lip, rip: rip, psw: psw, id: mpsid, running: true}
 			mpstab[mpsid].ptop()
 			fmt.Println(mpstab[mpsid].info)
 
@@ -1130,7 +1130,7 @@ func resume() { //测试返回
 	fmt.Println("Recovered")
 }
 
-func ptop2(conn net.Conn, rip string, psw int) { //执行转发
+func ptop2(conn net.Conn, rip string, psw string) { //执行转发
 	defer recover()
 	conn2, err := net.Dial("tcp", rip)
 	if err != nil {
@@ -1200,8 +1200,8 @@ func s5(conn net.Conn, n int) {
 			conn2.Close()
 			return
 		}
-		go Atob(conn, conn2, 0)
-		go Atob(conn2, conn, 0)
+		go Atob(conn, conn2, "")
+		go Atob(conn2, conn, "")
 
 	case bytes.Equal(bufab[0:4], []byte{5, 1, 0, 3}): //域名请求
 		ip := string(bufab[5:bufab[4]+5]) + ":" + strconv.Itoa(int(bufab[n-2])*256+int(bufab[n-1]))
@@ -1222,8 +1222,8 @@ func s5(conn net.Conn, n int) {
 			conn2.Close()
 			return
 		}
-		go Atob(conn, conn2, 0)
-		go Atob(conn2, conn, 0)
+		go Atob(conn, conn2, "")
+		go Atob(conn2, conn, "")
 
 	default:
 		conn.Close()
@@ -1266,7 +1266,7 @@ func iniloadln(r *bufio.Reader) string {
 	return str
 }
 
-func Atob(conn, conn2 net.Conn, psw int) { //数据转发
+func Atob(conn, conn2 net.Conn, psw string) { //数据转发
 	bufab := make([]byte, RECV_BUF_LEN)
 	defer recover()
 	defer conn.Close()
@@ -1274,12 +1274,10 @@ func Atob(conn, conn2 net.Conn, psw int) { //数据转发
 	defer func() {
 		abnumad <- false
 	}()
-
+	pswlen := len(psw)
+	j := 0
 	abnumad <- true
-	pswa := byte(psw)
-	if psw > 0 && pswa == 0 {
-		pswa = 21
-	}
+
 	for notquit {
 
 		conn.SetDeadline(time.Now().Add(CONNTO_MAX))
@@ -1288,9 +1286,13 @@ func Atob(conn, conn2 net.Conn, psw int) { //数据转发
 		if n <= 0 || err != nil {
 			return
 		}
-		if pswa != 0 {
+		if psw != "" {
 			for i := 0; i < n; i++ {
-				bufab[i] ^= pswa
+				bufab[i] ^= psw[j]
+				j++
+				if j >= pswlen {
+					j = 0
+				}
 			}
 		}
 		n, err = conn2.Write(bufab[0:n])
