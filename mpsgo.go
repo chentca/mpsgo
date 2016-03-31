@@ -1,6 +1,6 @@
 package main
 
-//ver 3.2.1 2016.3.24
+//ver 3.2.2 2016.3.31
 import (
 	"bufio"
 	"bytes"
@@ -15,7 +15,7 @@ import (
 	"time"
 )
 
-const RECV_BUF_LEN = 10240
+const RECV_BUF_LEN = 2048
 const CONNTO_MIN = time.Second * 5
 const CONNTO_MID = time.Minute * 1
 const CONNTO_MAX = time.Minute * 2
@@ -88,25 +88,22 @@ func main() {
 	go readsinf()
 	go inputer()
 	fmt.Println(strlist1)
-	go func() {
-		for notquit {
-			after := time.After(time.Second)
-			select {
-			case <-after:
-				spd1 = reads - spdn
-				spdn = reads
-				spd10 = spd1/10 + spd10/10*9
-				spd60 = spd1/60 + spd60/60*59
-			}
-		}
-	}()
+
 	var f bool
+	after := time.After(time.Second)
 	for notquit {
 		select {
-		case n = <-req:
+		case <-after: //计算单位时间的传输速度
+			spd1 = reads - spdn
+			spdn = reads
+			spd10 = spd1/10 + spd10/10*9
+			spd60 = spd1/60 + spd60/60*59
+			after = time.After(time.Second)
+
+		case n = <-req: //统计转发数据量
 			reads += int64(n)
 
-		case f = <-abnumad:
+		case f = <-abnumad: //统计转发纤程数量
 			if f == true {
 				abnum++
 			} else {
@@ -136,7 +133,7 @@ func mpsticker(this *mpsinfo) { //mps的资源
 		return
 	}
 	_, err = conn.Write(append([]byte{1}, []byte(this.mpsname)...)) //type source
-	conn.SetReadDeadline(time.Now().Add(CONNTO_MAX))
+	conn.SetDeadline(time.Now().Add(CONNTO_MAX))
 	_, err = conn.Read(buf)
 	if this.running {
 		go mpsticker(this)
@@ -217,7 +214,7 @@ func mpsrelay2(this *mpsinfo) { //当作mps的资源
 		return
 	}
 	_, err = conn.Write(append([]byte{1}, []byte(this.mpsname)...)) //type source
-	conn.SetReadDeadline(time.Now().Add(CONNTO_MAX))
+	conn.SetDeadline(time.Now().Add(CONNTO_MAX))
 	_, err = conn.Read(buf)
 	if this.running {
 		go mpsrelay2(this)
@@ -274,7 +271,7 @@ func mpsbridge2(this *mpsinfo) { //当作mps的资源
 		return
 	}
 	_, err = conn.Write(append([]byte{1}, []byte(this.mpsname)...)) //type source
-	conn.SetReadDeadline(time.Now().Add(CONNTO_MAX))
+	conn.SetDeadline(time.Now().Add(CONNTO_MAX))
 	_, err = conn.Read(buf)
 	if this.running {
 		go mpsbridge2(this)
@@ -297,7 +294,7 @@ func mpsbridge2(this *mpsinfo) { //当作mps的资源
 		conn2.Close()
 		return
 	}
-	conn2.SetReadDeadline(time.Now().Add(CONNTO_MAX))
+	conn2.SetDeadline(time.Now().Add(CONNTO_MAX))
 	_, err = conn2.Read(buf)
 	if err != nil || buf[0] != 0 {
 		conn.Close()
@@ -341,7 +338,7 @@ func mpsuser2(conn net.Conn, this *mpsinfo) {
 		return
 	}
 
-	conn2.SetReadDeadline(time.Now().Add(CONNTO_MAX))
+	conn2.SetDeadline(time.Now().Add(CONNTO_MAX))
 	_, err = conn2.Read(buf)
 	if err != nil || buf[0] != 0 {
 		conn.Close()
@@ -396,7 +393,7 @@ func hand(source, user *[]net.Conn, mpsname string) { //撮合资源和用户连
 func mpssvr2(conn net.Conn) {
 	defer recover()
 	var bufab = make([]byte, RECV_BUF_LEN)
-	conn.SetReadDeadline(time.Now().Add(CONNTO_MAX))
+	conn.SetDeadline(time.Now().Add(CONNTO_MAX))
 	n, err := conn.Read(bufab)
 	if err != nil {
 		conn.Close()
@@ -508,6 +505,9 @@ func inputer() { //cmd交互界面
 			fmt.Print(list())
 			fmt.Println("输入要关闭的索引号:")
 			fmt.Scanln(&inputint)
+			if inputint == 0 {
+				continue
+			}
 			if mpstab[inputint].ftype < 3 {
 				continue
 			}
@@ -815,7 +815,6 @@ func telsvr2(conn net.Conn) {
 			}
 			conn.Write([]byte(fmt.Sprintln("端口转发开始监听:", lip)))
 			mpsid++
-			//go ptop(listener, rip, int32(psw), mpsid)
 			mpstab[mpsid] = &mpsinfo{listener: listener, ftype: 3, info: lip + "->" + rip + "psw:" + psw, lip: lip, rip: rip, psw: psw, id: mpsid}
 			mpstab[mpsid].ptop()
 			conn.Write([]byte(list()))
@@ -865,7 +864,6 @@ func telsvr2(conn net.Conn) {
 			conn.Write([]byte(fmt.Sprintln("MPS资源:", lip, "连接到:", rip, "mpsname:", mpsname)))
 
 			mpsid++
-			//go mpssource(lip, rip, newticker, mpsid)
 			mpstab[mpsid] = &mpsinfo{lip: lip, rip: rip, ftype: 6, info: " MPS资源: " + lip + " mpsname:[" + mpsname + "]" + " 连接到: " + rip, id: mpsid, running: true, mpsname: mpsname}
 			mpstab[mpsid].mpssource()
 			conn.Write([]byte(list()))
@@ -1169,7 +1167,7 @@ func s5(conn net.Conn, n int) {
 		conn.Close()
 		return
 	}
-	conn.SetReadDeadline(time.Now().Add(CONNTO_MAX))
+	conn.SetDeadline(time.Now().Add(CONNTO_MAX))
 	n, err = conn.Read(bufab)
 	if n == 0 || err != nil {
 		conn.Close()
@@ -1233,7 +1231,7 @@ func s5(conn net.Conn, n int) {
 func socksswich(conn net.Conn) { //判断代理类型
 	defer recover()
 	bufab := make([]byte, RECV_BUF_LEN)
-	conn.SetReadDeadline(time.Now().Add(CONNTO_MAX))
+	conn.SetDeadline(time.Now().Add(CONNTO_MAX))
 	n, err := conn.Read(bufab)
 	if bytes.Equal(bufab[0:2], []byte{5, 1}) && err == nil { //socks5
 		go s5(conn, n)
@@ -1311,11 +1309,18 @@ func dbg(str ...interface{}) {
 	}
 }
 
-func xor(s string, p int32) string { //异或加密
-	var t = bytes.Buffer{}
-	for _, j := range s {
-		j ^= p
-		t.WriteRune(j)
+func xor(str, psw string) string { //异或加密
+	pswlen := len(psw)
+	j := 0
+	n := len(str)
+	buf := []byte(str)
+	for i := 0; i < n; i++ {
+		buf[i] ^= psw[j]
+		j++
+		if j >= pswlen {
+			j = 0
+		}
 	}
-	return t.String()
+
+	return string(buf)
 }
