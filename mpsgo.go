@@ -1,6 +1,6 @@
 package main
 
-//ver 3.2.2 2016.3.31
+//ver 3.2.3 2016.4.1
 import (
 	"bufio"
 	"bytes"
@@ -63,6 +63,8 @@ type mpsinfo struct { //mps信息记录
 	running                      bool
 }
 
+type callback func(this *mpsinfo, conn net.Conn)
+
 func main() {
 	defer quiter()
 	defer recover()
@@ -114,42 +116,25 @@ func main() {
 
 }
 
-func mpsticker(this *mpsinfo) { //mps的资源
+func mpssource2(this *mpsinfo, conn net.Conn) { //mps的资源
+	dbg("send source:", this.info)
 	buf := make([]byte, 1)
-	var conn net.Conn
-	var err error
-	for this.running {
-		for this.running {
-			conn, err = net.DialTimeout("tcp", this.rip, DialTO) //发出资源
-			if err == nil {
-				break
-			}
-			after := time.After(DialTO)
-			select {
-			case <-after:
-			}
-		}
-		if this.running == false {
-			return
-		}
-		dbg("send source:", this.info)
+	conn.Write(append([]byte{1}, []byte(this.mpsname)...)) //type source
+	conn.SetDeadline(time.Now().Add(CONNTO_MAX))
+	conn.Read(buf)
 
-		conn.Write(append([]byte{1}, []byte(this.mpsname)...)) //type source
-		conn.SetDeadline(time.Now().Add(CONNTO_MAX))
-		conn.Read(buf)
-
-		if buf[0] != 0 {
-			conn.Close()
-			continue
-		}
-		conn2, err := net.DialTimeout("tcp", this.lip, DialTO)
-		if err == nil {
-			go Atob(conn, conn2, this.mpsname)
-			go Atob(conn2, conn, this.mpsname)
-		} else {
-			conn.Close()
-		}
+	if buf[0] != 0 {
+		conn.Close()
+		return
 	}
+	conn2, err := net.DialTimeout("tcp", this.lip, DialTO)
+	if err == nil {
+		go Atob(conn, conn2, this.mpsname)
+		go Atob(conn2, conn, this.mpsname)
+	} else {
+		conn.Close()
+	}
+
 }
 
 func mpssvr21(conn net.Conn, mpsname string) { //资源握手判断
@@ -194,136 +179,92 @@ func mpssvr22(conn net.Conn, mpsname string) { //用户握手判断
 	}
 }
 
-func mpsrelay2(this *mpsinfo) { //当作mps的资源
+func mpsrelay2(this *mpsinfo, conn net.Conn) { //当作mps的资源
+	dbg("send source:", this.info)
 	buf := make([]byte, 1)
-	var conn net.Conn
-	var err error
-	for this.running {
-		for this.running {
-			conn, err = net.DialTimeout("tcp", this.rip, DialTO) //发出资源
-			if err == nil {
-				break
-			}
-			after := time.After(DialTO)
-			select {
-			case <-after:
-			}
-		}
-		if this.running == false {
-			return
-		}
-		dbg("send source:", this.info)
+	conn.Write(append([]byte{1}, []byte(this.mpsname)...)) //type source
+	conn.SetDeadline(time.Now().Add(CONNTO_MAX))
+	conn.Read(buf)
 
-		conn.Write(append([]byte{1}, []byte(this.mpsname)...)) //type source
-
-		conn.SetDeadline(time.Now().Add(CONNTO_MAX))
-		conn.Read(buf)
-
-		if buf[0] != 0 {
-			conn.Close()
-			continue
-		}
-
-		//当作用户判断握手
-		if mpssvrtab[this.mpsname] == nil {
-			source := new([]net.Conn)
-			user := new([]net.Conn)
-			mpssvrtab[this.mpsname] = &map[string]*([]net.Conn){"s": source, "u": user}
-		}
-		a := *mpssvrtab[this.mpsname]
-		source := a["s"]
-
-		if len(*source) > 0 {
-			var conn2 = (*source)[0]
-			if len(*source) == 1 {
-				*source = []net.Conn{}
-			} else {
-				*source = (*source)[1:]
-			}
-			conn2.Write(ok)
-			go Atob(conn, conn2, "")
-			go Atob(conn2, conn, "")
-
-			mpsdone[this.mpsname]++
-		} else {
-			conn.Write(quitcode)
-			conn.Close()
-		}
+	if buf[0] != 0 {
+		conn.Close()
+		return
 	}
-}
 
-func mpsbridge2(this *mpsinfo) { //当作mps的资源
-	buf := make([]byte, 1)
-	var conn net.Conn
-	var err error
-	for this.running {
-		for this.running {
-			conn, err = net.DialTimeout("tcp", this.lip, DialTO) //发出资源
-			if err == nil {
-				break
-			}
-			after := time.After(DialTO)
-			select {
-			case <-after:
-			}
-		}
-		if this.running == false {
-			return
-		}
+	//当作用户判断握手
+	if mpssvrtab[this.mpsname] == nil {
+		source := new([]net.Conn)
+		user := new([]net.Conn)
+		mpssvrtab[this.mpsname] = &map[string]*([]net.Conn){"s": source, "u": user}
+	}
+	a := *mpssvrtab[this.mpsname]
+	source := a["s"]
 
-		dbg("send source:", this.info)
-		conn.Write(append([]byte{1}, []byte(this.mpsname)...)) //type source
-		conn.SetDeadline(time.Now().Add(CONNTO_MAX))
-		conn.Read(buf)
-
-		if buf[0] != 0 {
-			conn.Close()
-			continue
+	if len(*source) > 0 {
+		var conn2 = (*source)[0]
+		if len(*source) == 1 {
+			*source = []net.Conn{}
+		} else {
+			*source = (*source)[1:]
 		}
-
-		//与下级用户发起对接
-		conn2, err := net.DialTimeout("tcp", this.rip, DialTO)
-		if err != nil {
-			conn.Close()
-
-			//delay 5
-			after := time.After(DialTO)
-			select {
-			case <-after:
-			}
-			continue
-		}
-		_, err = conn2.Write(append([]byte{2}, []byte(this.mpsname)...)) //type user
-		if err != nil {
-			conn.Close()
-			conn2.Close()
-			continue
-		}
-		conn2.SetDeadline(time.Now().Add(CONNTO_MAX))
-		_, err = conn2.Read(buf)
-		if err != nil || buf[0] != 0 {
-			conn.Close()
-			conn2.Close()
-			continue
-		}
-
+		conn2.Write(ok)
 		go Atob(conn, conn2, "")
 		go Atob(conn2, conn, "")
 
 		mpsdone[this.mpsname]++
+	} else {
+		conn.Write(quitcode)
+		conn.Close()
 	}
+
+}
+
+func mpsbridge2(this *mpsinfo, conn net.Conn) { //当作mps的资源
+	dbg("send source:", this.info)
+	buf := make([]byte, 1)
+	conn.Write(append([]byte{1}, []byte(this.mpsname)...)) //type source
+	conn.SetDeadline(time.Now().Add(CONNTO_MAX))
+	conn.Read(buf)
+
+	if buf[0] != 0 {
+		conn.Close()
+		return
+	}
+
+	//与下级用户发起对接
+	conn2, err := net.DialTimeout("tcp", this.lip, DialTO)
+	if err != nil {
+		conn.Close()
+		//delay 5
+		after := time.After(DialTO)
+		select {
+		case <-after:
+		}
+		return
+	}
+	conn2.Write(append([]byte{2}, []byte(this.mpsname)...)) //type user
+	conn2.SetDeadline(time.Now().Add(CONNTO_MAX))
+	conn2.Read(buf)
+	if buf[0] != 0 {
+		conn.Close()
+		conn2.Close()
+		return
+	}
+	go Atob(conn, conn2, "")
+	go Atob(conn2, conn, "")
+	mpsdone[this.mpsname]++
 }
 
 func (this *mpsinfo) mpssource() { //mps资源提供
-	go mpsticker(this)
+	go mpsone(this, mpssource2)
 }
 
 func (this *mpsinfo) mpsrelay() { //mps资源中继
-	go mpsrelay2(this)
+	go mpsone(this, mpsrelay2)
 }
 
 func (this *mpsinfo) mpsbridge() { //mps资源中继
-	go mpsbridge2(this)
+	go mpsone(this, mpsbridge2)
 }
 
 func mpsuser2(conn net.Conn, this *mpsinfo) {
@@ -352,6 +293,28 @@ func mpsuser2(conn net.Conn, this *mpsinfo) {
 	}
 	go Atob(conn, conn2, this.mpsname)
 	go Atob(conn2, conn, this.mpsname)
+
+}
+
+func mpsone(this *mpsinfo, next callback) {
+	var conn net.Conn
+	var err error
+	for this.running {
+		for this.running {
+			conn, err = net.DialTimeout("tcp", this.rip, DialTO) //发出资源
+			if err == nil {
+				break
+			}
+			after := time.After(DialTO)
+			select {
+			case <-after:
+			}
+		}
+		if this.running == false {
+			return
+		}
+		go next(this, conn)
+	}
 
 }
 
