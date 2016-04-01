@@ -313,7 +313,7 @@ func mpsone(this *mpsinfo, next callback) {
 		if this.running == false {
 			return
 		}
-		go next(this, conn)
+		next(this, conn)
 	}
 
 }
