@@ -1,6 +1,6 @@
 package main
 
-//ver 3.2.3 2016.4.1
+//ver 3.2.3 2016.4.5
 import (
 	"bufio"
 	"bytes"
@@ -15,7 +15,8 @@ import (
 	"time"
 )
 
-const RECV_BUF_LEN = 2048
+//GOGC = 50 //要在环境变量里修改 env
+const RECV_BUF_LEN = 4096
 const CONNTO_MIN = time.Second * 5
 const CONNTO_MID = time.Minute * 1
 const CONNTO_MAX = time.Minute * 2
@@ -48,7 +49,6 @@ var reads int64 = 0
 var spd1, spd10, spd60 int64 = 0, 0, 0
 var req chan int = make(chan int, Numcpu)       //统计转发数量
 var abnumad chan bool = make(chan bool, Numcpu) //统计转发线程数量
-
 //var bufreq chan *[]byte = make(chan *[]byte, bufmax)
 var mpstab map[int]*mpsinfo = make(map[int]*mpsinfo)
 var mpssvrtab map[string]*map[string]*[]net.Conn = make(map[string]*map[string]*[]net.Conn)
@@ -117,7 +117,6 @@ func main() {
 }
 
 func mpssource2(this *mpsinfo, conn net.Conn) { //mps的资源
-	dbg("send source:", this.info)
 	buf := make([]byte, 1)
 	conn.Write(append([]byte{1}, []byte(this.mpsname)...)) //type source
 	conn.SetDeadline(time.Now().Add(CONNTO_MAX))
@@ -235,11 +234,7 @@ func mpsbridge2(this *mpsinfo, conn net.Conn) { //当作mps的资源
 	conn2, err := net.DialTimeout("tcp", this.lip, DialTO)
 	if err != nil {
 		conn.Close()
-		//delay 5
-		after := time.After(DialTO)
-		select {
-		case <-after:
-		}
+		time.Sleep(5 * time.Second)
 		return
 	}
 	conn2.Write(append([]byte{2}, []byte(this.mpsname)...)) //type user
@@ -301,14 +296,13 @@ func mpsone(this *mpsinfo, next callback) {
 	var err error
 	for this.running {
 		for this.running {
+			dbg("send source")
 			conn, err = net.DialTimeout("tcp", this.rip, DialTO) //发出资源
 			if err == nil {
 				break
 			}
-			after := time.After(DialTO)
-			select {
-			case <-after:
-			}
+			time.Sleep(5 * time.Second)
+
 		}
 		if this.running == false {
 			return
@@ -631,7 +625,7 @@ func inputer() { //cmd交互界面
 			}
 			var listener, err = net.Listen("tcp", lip)
 			if err != nil {
-				fmt.Println("启动MPS服务失败:" + err.Error())
+				fmt.Println("启动Telsvr失败:" + err.Error())
 				continue
 			}
 			fmt.Println("TelSvr服务开启:", lip)
