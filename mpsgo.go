@@ -1,6 +1,6 @@
 package main
 
-//ver 3.2.4 2016.4.6
+//ver 3.3 2016.4.8
 import (
 	"bufio"
 	"bytes"
@@ -35,7 +35,9 @@ var strlist0 []string = []string{
 	"9:设置,set",
 	"r:资源中继,MPS source relay",
 	"b:资源桥,MPS source bridge",
-	"t:Telnet服务,Telnet"}
+	"t:Telnet服务,Telnet",
+	"10:TCP转UDP,TCP to UDP",
+	"11:UDP转TCP,UDP to TCP"}
 
 var strtab0 []string = []string{"1:切换运行状态（自动保存恢复配置/手动保存恢复配置）",
 	"2:读取配置并执行",
@@ -52,15 +54,20 @@ var notquit bool = true
 var mpsid, abnum int = 0, 0
 var reads int64 = 0
 var spd1, spd10, spd60 int64 = 0, 0, 0
-var req chan int = make(chan int, Numcpu)       //统计转发数量
-var abnumad chan bool = make(chan bool, Numcpu) //统计转发线程数量
-//var bufreq chan *[]byte = make(chan *[]byte, bufmax)
+var req chan int = make(chan int, 100)       //统计转发数量
+var abnumad chan bool = make(chan bool, 100) //统计转发线程数量
 var mpstab map[int]*mpsinfo = make(map[int]*mpsinfo)
 var mpssvrtab map[string]*map[string]*[]net.Conn = make(map[string]*map[string]*[]net.Conn)
 var mpsdone map[string]int = make(map[string]int)
 var strlist1, strtab string
+var u2ttab map[string]net.Conn = make(map[string]net.Conn) //建立u2t的对应关系
+var u2treq chan u2tdata = make(chan u2tdata, 100)
 
-//var bufab []byte = make([]byte, RECV_BUF_LEN)
+type u2tdata struct {
+	udplistener *net.UDPConn
+	udpaddr     *net.UDPAddr
+	buf         []byte
+}
 
 type mpsinfo struct { //mps信息记录
 	info, lip, rip, mpsname, psw string
@@ -101,6 +108,7 @@ func main() {
 
 	var f bool
 	after := time.After(time.Second)
+
 	for notquit {
 		select {
 		case <-after: //计算单位时间的传输速度
@@ -325,7 +333,6 @@ func (this *mpsinfo) mpsuser() { //mps资源使用者
 		defer fmt.Println("MPS用户退出:", this.rip)
 		defer recover()
 		defer delete(mpstab, this.id)
-		defer this.listener.Close()
 		for notquit && this.running {
 			conn, err := this.listener.Accept() //接受连接
 			if err != nil {
@@ -386,7 +393,6 @@ func (this *mpsinfo) mpssvr() { //mps中转服务
 		defer fmt.Println("MPS服务退出:", this.id)
 		defer delete(mpstab, this.id)
 		defer recover()
-		defer this.listener.Close()
 
 		for notquit && this.running {
 			conn, err := this.listener.Accept() //接受连接
@@ -498,9 +504,9 @@ func inputer(conn net.Conn, this *mpsinfo) { //cmd交互界面
 			}
 
 			switch mpstab[inputint].ftype {
-			case 3, 4, 5, 7, 10:
+			case 3, 4, 5, 7, 8, 9, 10:
 				mpstab[inputint].listener.Close()
-			case 6:
+			case 6: //mps资源？
 
 			default:
 
@@ -547,7 +553,7 @@ func inputer(conn net.Conn, this *mpsinfo) { //cmd交互界面
 				continue
 			}
 			mpsid++
-			//go socks45(listener, mpsid)
+
 			mpstab[mpsid] = &mpsinfo{lip: lip, listener: listener, ftype: 4, info: " socks代理: " + lip, id: mpsid, running: true}
 			mpstab[mpsid].socks45()
 			inputerout(mpstab[mpsid].info, conn)
@@ -684,7 +690,52 @@ func inputer(conn net.Conn, this *mpsinfo) { //cmd交互界面
 			mpstab[mpsid].mpsbridge()
 			inputerout("MPS服务桥开启:"+mpstab[mpsid].info, conn)
 			inputerout(list(), conn)
+		case "10": //tcp2udp
+			var lip, rip string
+			lip = inputerin("请输入本地端口(如：127.0.0.1:80 或 0.0.0.0:80)*取消:", conn)
 
+			if lip == "*" || len(lip) == 0 {
+				continue
+			}
+			rip = inputerin("请输入转发端口(如：123.0.0.123:80 或 www.xxx.com:80)*取消:", conn)
+
+			if rip == "*" || len(rip) == 0 {
+				continue
+			}
+
+			var listener, err = net.Listen("tcp", lip) //侦听端口
+			if err != nil {
+				inputerout("添加TCPtoUDP失败:"+err.Error(), conn)
+				continue
+			}
+			mpsid++
+			mpstab[mpsid] = &mpsinfo{listener: listener, ftype: 8, info: lip + "T2U->" + rip, lip: lip, rip: rip, id: mpsid, running: true}
+			mpstab[mpsid].t2u()
+			inputerout(mpstab[mpsid].info, conn)
+			inputerout(list(), conn)
+		case "11": //udp2tcp
+			var lip, rip string
+			lip = inputerin("请输入本地端口(如：127.0.0.1:80 或 0.0.0.0:80)*取消:", conn)
+
+			if lip == "*" || len(lip) == 0 {
+				continue
+			}
+			rip = inputerin("请输入转发端口(如：123.0.0.123:80 或 www.xxx.com:80)*取消:", conn)
+
+			if rip == "*" || len(rip) == 0 {
+				continue
+			}
+
+			var listener, err = net.Listen("tcp", lip) //侦听端口
+			if err != nil {
+				inputerout("添加端口转发失败:"+err.Error(), conn)
+				continue
+			}
+			mpsid++
+			mpstab[mpsid] = &mpsinfo{listener: listener, ftype: 9, info: lip + "U2T->" + rip, lip: lip, rip: rip, id: mpsid, running: true}
+			mpstab[mpsid].ptop()
+			inputerout(mpstab[mpsid].info, conn)
+			inputerout(list(), conn)
 		default: //help
 			if conn != nil && inputstr == "0" {
 				return
@@ -700,7 +751,7 @@ func (this *mpsinfo) telsvr() { //TelSvr服务
 		defer fmt.Println("TelSvr退出:", this.id)
 		defer delete(mpstab, this.id)
 		defer recover()
-		//defer this.listener.Close()
+
 		for notquit && this.running {
 			conn, err := this.listener.Accept() //接受连接
 			if err != nil {
@@ -740,7 +791,7 @@ func saveini() { //保存配置
 	for _, v := range mpstab {
 		wstr(ini, strconv.Itoa(v.ftype))
 		wstr(ini, v.lip)
-		if v.ftype == 3 || v.ftype == 6 || v.ftype == 7 || v.ftype == 11 || v.ftype == 12 {
+		if v.ftype == 3 || v.ftype == 6 || v.ftype == 7 || v.ftype == 8 || v.ftype == 9 || v.ftype == 11 || v.ftype == 12 {
 			wstr(ini, v.rip)
 		}
 		if v.ftype == 3 {
@@ -833,7 +884,32 @@ func loadini() {
 			mpstab[mpsid] = &mpsinfo{lip: lip, rip: rip, listener: listener, ftype: 7, info: "MPS用户开启:" + lip + "mpsname:[" + mpsname + "]", id: mpsid, running: true, mpsname: mpsname}
 			mpstab[mpsid].mpsuser()
 			fmt.Println(mpstab[mpsid].info)
+		case "8":
+			lip := iniloadln(r)
+			rip := iniloadln(r)
 
+			listener, err = net.Listen("tcp", lip) //侦听端口
+			if err != nil {
+				fmt.Println("添加TCPtoUDP失败:" + err.Error())
+				continue
+			}
+			mpsid++
+			mpstab[mpsid] = &mpsinfo{listener: listener, ftype: 8, info: lip + "T2U->" + rip, lip: lip, rip: rip, id: mpsid, running: true}
+			mpstab[mpsid].t2u()
+			fmt.Println(mpstab[mpsid].info)
+		case "9":
+			lip := iniloadln(r)
+			rip := iniloadln(r)
+
+			listener, err = net.Listen("tcp", lip) //侦听端口
+			if err != nil {
+				fmt.Println("添加UDPtoTCP失败:" + err.Error())
+				continue
+			}
+			mpsid++
+			mpstab[mpsid] = &mpsinfo{listener: listener, ftype: 9, info: lip + "U2T->" + rip, lip: lip, rip: rip, id: mpsid, running: true}
+			mpstab[mpsid].u2t()
+			fmt.Println(mpstab[mpsid].info)
 		case "10":
 			lip := iniloadln(r)
 			listener, err = net.Listen("tcp", lip)
@@ -908,7 +984,6 @@ func (this *mpsinfo) ptop() { //端口转发服务
 		defer fmt.Println("端口转发退出:", this.rip)
 		defer delete(mpstab, this.id)
 		defer recover()
-		//defer this.listener.Close()
 
 		for notquit && this.running {
 			conn, err := this.listener.Accept() //接受连接
@@ -938,14 +1013,8 @@ func s5(conn net.Conn, n int) {
 
 	switch {
 	case bytes.Equal(bufab[0:4], []byte{5, 1, 0, 1}): //ip请求
-		var ip bytes.Buffer
-
-		ip.WriteString(strconv.Itoa(int(bufab[4])) + "." +
-			strconv.Itoa(int(bufab[5])) + "." +
-			strconv.Itoa(int(bufab[6])) + "." +
-			strconv.Itoa(int(bufab[7])) + ":" +
-			strconv.Itoa(int(bufab[9])+int(bufab[8])*256))
-		conn2, err := net.DialTimeout("tcp", ip.String(), DialTO)
+		ip := fmt.Sprintf("%d.%d.%d.%d:%d", bufab[4], bufab[5], bufab[6], bufab[7], int(bufab[8])<<8+int(bufab[9]))
+		conn2, err := net.DialTimeout("tcp", ip, DialTO)
 		if err != nil {
 			bufab[1] = 3
 			conn.Write(bufab[0:n])
@@ -964,7 +1033,7 @@ func s5(conn net.Conn, n int) {
 		go Atob(conn2, conn, "")
 
 	case bytes.Equal(bufab[0:4], []byte{5, 1, 0, 3}): //域名请求
-		ip := string(bufab[5:bufab[4]+5]) + ":" + strconv.Itoa(int(bufab[n-2])*256+int(bufab[n-1]))
+		ip := fmt.Sprintf("%s:%d", string(bufab[5:bufab[4]+5]), int(bufab[n-2])<<8+int(bufab[n-1]))
 		dbg("ip:", ip)
 		conn2, err := net.DialTimeout("tcp", ip, DialTO)
 		if err != nil {
@@ -1008,7 +1077,7 @@ func (this *mpsinfo) socks45() {
 		defer fmt.Println("socks服务器退出")
 		defer delete(mpstab, this.id)
 		defer recover()
-		defer this.listener.Close()
+
 		for notquit && this.running {
 			conn, err := this.listener.Accept() //接受连接
 			if err != nil {
@@ -1026,6 +1095,117 @@ func iniloadln(r *bufio.Reader) string {
 	return str
 }
 
+func (this *mpsinfo) t2u() {
+	go func() {
+		defer fmt.Println("TCPtoUDP退出:", this.rip)
+		defer delete(mpstab, this.id)
+		defer recover()
+
+		for notquit && this.running {
+			conn, err := this.listener.Accept() //接受连接
+			if err != nil {
+				return
+			}
+			go t2u1(conn, this.rip, this.psw)
+		}
+	}()
+}
+
+func (this *mpsinfo) u2t() {
+	go func(this *mpsinfo) {
+		for notquit && this.running {
+			select {
+			case u2tdata := <-u2treq:
+				id := u2tdata.udpaddr.String()
+				if u2ttab[id] == nil {
+					conn2, err := net.Dial("tcp", this.rip)
+					if err != nil {
+						fmt.Println("u2t conn2 err" + err.Error())
+						continue
+					}
+					u2ttab[id] = conn2
+				}
+				conn2 := u2ttab[id]
+				_, err := conn2.Write(u2tdata.buf)
+				if err != nil {
+					conn2.Close()
+					u2ttab[id] = nil
+					continue
+				}
+				go u2t1(u2tdata.udplistener, u2tdata.udpaddr, conn2)
+			}
+		}
+	}(this)
+	go func() {
+		defer fmt.Println("UDPtoTCP退出:", this.rip)
+		defer delete(mpstab, this.id)
+		defer recover()
+		//监听地址
+		udpAddr, err := net.ResolveUDPAddr("udp4", this.lip)
+		if err != nil {
+			return
+		}
+		//监听连接
+		udpListener, err := net.ListenUDP("udp4", udpAddr)
+		if err != nil {
+			return
+		}
+		buf := make([]byte, RECV_BUF_LEN)
+
+		for notquit && this.running {
+			n, udpaddr, err := udpListener.ReadFromUDP(buf)
+			if err != nil {
+				continue
+			}
+			u2treq <- u2tdata{udplistener: udpListener, udpaddr: udpaddr, buf: buf[:n]}
+		}
+	}()
+}
+
+func t2u1(conn net.Conn, rip string, psw string) { //执行转发
+	defer recover()
+	udpAddr, err := net.ResolveUDPAddr("udp4", rip)
+	if err != nil {
+		conn.Close()
+		return
+	}
+
+	//udp连接
+	udpConn, err := net.DialUDP("udp4", nil, udpAddr)
+	if err != nil {
+		conn.Close()
+		return
+	}
+	go Atob(conn, udpConn, "")
+	go Atob(udpConn, conn, "")
+}
+
+func u2t1(conn1 *net.UDPConn, udpaddr *net.UDPAddr, conn2 net.Conn) {
+	bufab := make([]byte, RECV_BUF_LEN)
+	defer recover()
+	defer func() {
+		abnumad <- false
+		conn2.Close()
+	}()
+	abnumad <- true
+
+	for notquit {
+		conn2.SetDeadline(time.Now().Add(CONNTO_MAX))
+		n, err := conn2.Read(bufab)
+
+		if n <= 0 || err != nil {
+			return
+		}
+
+		n, err = conn1.WriteToUDP(bufab[:n], udpaddr)
+
+		if n <= 0 || err != nil {
+			return
+		}
+		req <- n
+	}
+}
+
 func Atob(conn, conn2 net.Conn, psw string) { //数据转发
 	bufab := make([]byte, RECV_BUF_LEN)
 	defer recover()
@@ -1034,6 +1214,7 @@ func Atob(conn, conn2 net.Conn, psw string) { //数据转发
 	defer func() {
 		abnumad <- false
 	}()
+
 	pswlen := len(psw)
 	j := 0
 	abnumad <- true
@@ -1055,14 +1236,14 @@ func Atob(conn, conn2 net.Conn, psw string) { //数据转发
 				}
 			}
 		}
-		n, err = conn2.Write(bufab[0:n])
 
+		n, err = conn2.Write(bufab[0:n])
 		if n <= 0 || err != nil {
 			return
 		}
 		req <- n
-
 	}
+
 }
 
 func dbg(str ...interface{}) {
