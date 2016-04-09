@@ -1,6 +1,6 @@
 package main
 
-//ver 3.3 2016.4.8
+//ver 3.3 2016.4.9
 import (
 	"bufio"
 	"bytes"
@@ -36,8 +36,10 @@ var strlist0 []string = []string{
 	"r:资源中继,MPS source relay",
 	"b:资源桥,MPS source bridge",
 	"t:Telnet服务,Telnet",
-	"10:TCP转UDP,TCP to UDP",
-	"11:UDP转TCP,UDP to TCP"}
+	"10:UTU A:UDP转TCP,UTU A:UDP to TCP",
+	"11:UTU B:TCP转UDP,UTU B:TCP to UDP",
+	"12:TUT A:TCP转UDP,TUT A:TCP to UDP",
+	"13:TUT B:UDP转TCP,TUT B:UDP to TCP"}
 
 var strtab0 []string = []string{"1:切换运行状态（自动保存恢复配置/手动保存恢复配置）",
 	"2:读取配置并执行",
@@ -48,7 +50,7 @@ var dbgflag bool = false
 var Numcpu int = runtime.NumCPU()
 var mpsini os.File
 var autorun = "0"
-var ok = []byte{0}
+var okbyte = []byte{0}
 var quitcode = []byte{1}
 var notquit bool = true
 var mpsid, abnum int = 0, 0
@@ -60,13 +62,19 @@ var mpstab map[int]*mpsinfo = make(map[int]*mpsinfo)
 var mpssvrtab map[string]*map[string]*[]net.Conn = make(map[string]*map[string]*[]net.Conn)
 var mpsdone map[string]int = make(map[string]int)
 var strlist1, strtab string
-var u2ttab map[string]net.Conn = make(map[string]net.Conn) //建立u2t的对应关系
-var u2treq chan u2tdata = make(chan u2tdata, 100)
+var uttab map[string]*uttabdata = make(map[string]*uttabdata) //建立ut的对应关系
 
-type u2tdata struct {
+type utdata struct {
 	udplistener *net.UDPConn
 	udpaddr     *net.UDPAddr
 	buf         []byte
+	this        *mpsinfo
+}
+
+type uttabdata struct {
+	conn     net.Conn
+	id       byte
+	tutidreq chan byte
 }
 
 type mpsinfo struct { //mps信息记录
@@ -153,14 +161,15 @@ func mpssource2(this *mpsinfo, conn net.Conn) { //mps的资源
 }
 
 func mpssvr21(conn net.Conn, mpsname string) { //资源握手判断
-	if mpssvrtab[mpsname] == nil {
+	value, ok := mpssvrtab[mpsname]
+	if !ok {
 		source := new([]net.Conn)
 		user := new([]net.Conn)
-		mpssvrtab[mpsname] = &map[string]*([]net.Conn){"s": source, "u": user}
+		value = &map[string]*([]net.Conn){"s": source, "u": user}
+		mpssvrtab[mpsname] = value
 	}
-	a := *mpssvrtab[mpsname]
-	source := a["s"]
-	user := a["u"]
+	source := (*value)["s"]
+	user := (*value)["u"]
 	*source = append(*source, conn)
 	if len(*source) > 1 {
 		conn = (*source)[0]
@@ -174,14 +183,15 @@ func mpssvr21(conn net.Conn, mpsname string) { //资源握手判断
 }
 
 func mpssvr22(conn net.Conn, mpsname string) { //用户握手判断
-	if mpssvrtab[mpsname] == nil {
+	value, ok := mpssvrtab[mpsname]
+	if !ok {
 		source := new([]net.Conn)
 		user := new([]net.Conn)
-		mpssvrtab[mpsname] = &map[string]*([]net.Conn){"s": source, "u": user}
+		value = &map[string]*([]net.Conn){"s": source, "u": user}
+		mpssvrtab[mpsname] = value
 	}
-	a := *mpssvrtab[mpsname]
-	source := a["s"]
-	user := a["u"]
+	source := (*value)["s"]
+	user := (*value)["u"]
 	*user = append(*user, conn)
 	if len(*user) > 60 {
 		conn = (*user)[0]
@@ -207,13 +217,14 @@ func mpsrelay2(this *mpsinfo, conn net.Conn) { //当作mps的资源
 	}
 
 	//当作用户判断握手
-	if mpssvrtab[this.mpsname] == nil {
+	value, ok := mpssvrtab[this.mpsname]
+	if !ok {
 		source := new([]net.Conn)
 		user := new([]net.Conn)
-		mpssvrtab[this.mpsname] = &map[string]*([]net.Conn){"s": source, "u": user}
+		value = &map[string]*([]net.Conn){"s": source, "u": user}
+		mpssvrtab[this.mpsname] = value
 	}
-	a := *mpssvrtab[this.mpsname]
-	source := a["s"]
+	source := (*value)["s"]
 
 	if len(*source) > 0 {
 		var conn2 = (*source)[0]
@@ -222,7 +233,7 @@ func mpsrelay2(this *mpsinfo, conn net.Conn) { //当作mps的资源
 		} else {
 			*source = (*source)[1:]
 		}
-		conn2.Write(ok)
+		conn2.Write(okbyte)
 		go Atob(conn, conn2, "")
 		go Atob(conn2, conn, "")
 
@@ -357,8 +368,8 @@ func hand(source, user *[]net.Conn, mpsname string) { //撮合资源和用户连
 	} else {
 		*user = (*user)[1:]
 	}
-	conn.Write(ok)
-	conn2.Write(ok)
+	conn.Write(okbyte)
+	conn2.Write(okbyte)
 
 	go Atob(conn, conn2, "")
 	go Atob(conn2, conn, "")
@@ -690,7 +701,7 @@ func inputer(conn net.Conn, this *mpsinfo) { //cmd交互界面
 			mpstab[mpsid].mpsbridge()
 			inputerout("MPS服务桥开启:"+mpstab[mpsid].info, conn)
 			inputerout(list(), conn)
-		case "10": //tcp2udp
+		case "11": //utut2u type8
 			var lip, rip string
 			lip = inputerin("请输入本地端口(如：127.0.0.1:80 或 0.0.0.0:80)*取消:", conn)
 
@@ -705,15 +716,15 @@ func inputer(conn net.Conn, this *mpsinfo) { //cmd交互界面
 
 			var listener, err = net.Listen("tcp", lip) //侦听端口
 			if err != nil {
-				inputerout("添加TCPtoUDP失败:"+err.Error(), conn)
+				inputerout("添加utut2u失败:"+err.Error(), conn)
 				continue
 			}
 			mpsid++
-			mpstab[mpsid] = &mpsinfo{listener: listener, ftype: 8, info: lip + "T2U->" + rip, lip: lip, rip: rip, id: mpsid, running: true}
-			mpstab[mpsid].t2u()
+			mpstab[mpsid] = &mpsinfo{listener: listener, ftype: 8, info: lip + "utut2u->" + rip, lip: lip, rip: rip, id: mpsid, running: true}
+			mpstab[mpsid].ututu()
 			inputerout(mpstab[mpsid].info, conn)
 			inputerout(list(), conn)
-		case "11": //udp2tcp
+		case "10": //UTU-U2T type9
 			var lip, rip string
 			lip = inputerin("请输入本地端口(如：127.0.0.1:80 或 0.0.0.0:80)*取消:", conn)
 
@@ -728,14 +739,63 @@ func inputer(conn net.Conn, this *mpsinfo) { //cmd交互界面
 
 			var listener, err = net.Listen("tcp", lip) //侦听端口
 			if err != nil {
-				inputerout("添加端口转发失败:"+err.Error(), conn)
+				inputerout("添加UTU-U2T失败:"+err.Error(), conn)
 				continue
 			}
 			mpsid++
-			mpstab[mpsid] = &mpsinfo{listener: listener, ftype: 9, info: lip + "U2T->" + rip, lip: lip, rip: rip, id: mpsid, running: true}
-			mpstab[mpsid].ptop()
+			mpstab[mpsid] = &mpsinfo{listener: listener, ftype: 9, info: lip + "UTU-U2T->" + rip, lip: lip, rip: rip, id: mpsid, running: true}
+			mpstab[mpsid].utuut()
 			inputerout(mpstab[mpsid].info, conn)
 			inputerout(list(), conn)
+
+		case "13": //TUT-T2U
+			var lip, rip string
+			lip = inputerin("请输入本地端口(如：127.0.0.1:80 或 0.0.0.0:80)*取消:", conn)
+
+			if lip == "*" || len(lip) == 0 {
+				continue
+			}
+			rip = inputerin("请输入转发端口(如：123.0.0.123:80 或 www.xxx.com:80)*取消:", conn)
+
+			if rip == "*" || len(rip) == 0 {
+				continue
+			}
+
+			var listener, err = net.Listen("tcp", lip) //侦听端口
+			if err != nil {
+				inputerout("添加TUT-T2U失败:"+err.Error(), conn)
+				continue
+			}
+			mpsid++
+			mpstab[mpsid] = &mpsinfo{listener: listener, ftype: 13, info: lip + "TUT TU->" + rip, lip: lip, rip: rip, id: mpsid, running: true}
+			mpstab[mpsid].tuttu()
+			inputerout(mpstab[mpsid].info, conn)
+			inputerout(list(), conn)
+
+		case "14": //TUT-U2T
+			var lip, rip string
+			lip = inputerin("请输入本地端口(如：127.0.0.1:80 或 0.0.0.0:80)*取消:", conn)
+
+			if lip == "*" || len(lip) == 0 {
+				continue
+			}
+			rip = inputerin("请输入转发端口(如：123.0.0.123:80 或 www.xxx.com:80)*取消:", conn)
+
+			if rip == "*" || len(rip) == 0 {
+				continue
+			}
+
+			var listener, err = net.Listen("tcp", lip) //侦听端口
+			if err != nil {
+				inputerout("添加TUT-U2T失败:"+err.Error(), conn)
+				continue
+			}
+			mpsid++
+			mpstab[mpsid] = &mpsinfo{listener: listener, ftype: 14, info: lip + "TUT UT->" + rip, lip: lip, rip: rip, id: mpsid, running: true}
+			mpstab[mpsid].tutut()
+			inputerout(mpstab[mpsid].info, conn)
+			inputerout(list(), conn)
+
 		default: //help
 			if conn != nil && inputstr == "0" {
 				return
@@ -791,13 +851,15 @@ func saveini() { //保存配置
 	for _, v := range mpstab {
 		wstr(ini, strconv.Itoa(v.ftype))
 		wstr(ini, v.lip)
-		if v.ftype == 3 || v.ftype == 6 || v.ftype == 7 || v.ftype == 8 || v.ftype == 9 || v.ftype == 11 || v.ftype == 12 {
+		switch v.ftype {
+		case 3, 6, 7, 8, 9, 11, 12, 13, 14:
 			wstr(ini, v.rip)
 		}
 		if v.ftype == 3 {
 			wstr(ini, v.psw)
 		}
-		if v.ftype == 6 || v.ftype == 7 || v.ftype == 11 || v.ftype == 12 {
+		switch v.ftype {
+		case 6, 7, 11, 12:
 			wstr(ini, v.mpsname)
 		}
 	}
@@ -890,12 +952,12 @@ func loadini() {
 
 			listener, err = net.Listen("tcp", lip) //侦听端口
 			if err != nil {
-				fmt.Println("添加TCPtoUDP失败:" + err.Error())
+				fmt.Println("添加UTU TU失败:" + err.Error())
 				continue
 			}
 			mpsid++
-			mpstab[mpsid] = &mpsinfo{listener: listener, ftype: 8, info: lip + "T2U->" + rip, lip: lip, rip: rip, id: mpsid, running: true}
-			mpstab[mpsid].t2u()
+			mpstab[mpsid] = &mpsinfo{listener: listener, ftype: 8, info: lip + "UTU TU->" + rip, lip: lip, rip: rip, id: mpsid, running: true}
+			mpstab[mpsid].ututu()
 			fmt.Println(mpstab[mpsid].info)
 		case "9":
 			lip := iniloadln(r)
@@ -903,12 +965,12 @@ func loadini() {
 
 			listener, err = net.Listen("tcp", lip) //侦听端口
 			if err != nil {
-				fmt.Println("添加UDPtoTCP失败:" + err.Error())
+				fmt.Println("添加UTU UT失败:" + err.Error())
 				continue
 			}
 			mpsid++
-			mpstab[mpsid] = &mpsinfo{listener: listener, ftype: 9, info: lip + "U2T->" + rip, lip: lip, rip: rip, id: mpsid, running: true}
-			mpstab[mpsid].u2t()
+			mpstab[mpsid] = &mpsinfo{listener: listener, ftype: 9, info: lip + "UTU UT->" + rip, lip: lip, rip: rip, id: mpsid, running: true}
+			mpstab[mpsid].utuut()
 			fmt.Println(mpstab[mpsid].info)
 		case "10":
 			lip := iniloadln(r)
@@ -940,6 +1002,33 @@ func loadini() {
 			mpsid++
 			mpstab[mpsid] = &mpsinfo{ftype: 12, info: " MPS服务桥: " + rip + "[" + mpsname + "]->" + lip, lip: lip, rip: rip, id: mpsid, mpsname: mpsname, running: true}
 			mpstab[mpsid].mpsbridge()
+			fmt.Println(mpstab[mpsid].info)
+
+		case "13":
+			lip := iniloadln(r)
+			rip := iniloadln(r)
+
+			listener, err = net.Listen("tcp", lip) //侦听端口
+			if err != nil {
+				fmt.Println("添加TUT TU失败:" + err.Error())
+				continue
+			}
+			mpsid++
+			mpstab[mpsid] = &mpsinfo{listener: listener, ftype: 13, info: lip + "TUT TU->" + rip, lip: lip, rip: rip, id: mpsid, running: true}
+			mpstab[mpsid].tuttu()
+			fmt.Println(mpstab[mpsid].info)
+		case "14":
+			lip := iniloadln(r)
+			rip := iniloadln(r)
+
+			listener, err = net.Listen("tcp", lip) //侦听端口
+			if err != nil {
+				fmt.Println("添加TUT UT失败:" + err.Error())
+				continue
+			}
+			mpsid++
+			mpstab[mpsid] = &mpsinfo{listener: listener, ftype: 14, info: lip + "TUT UT->" + rip, lip: lip, rip: rip, id: mpsid, running: true}
+			mpstab[mpsid].tutut()
 			fmt.Println(mpstab[mpsid].info)
 		}
 	}
@@ -1095,7 +1184,7 @@ func iniloadln(r *bufio.Reader) string {
 	return str
 }
 
-func (this *mpsinfo) t2u() {
+func (this *mpsinfo) ututu() {
 	go func() {
 		defer fmt.Println("TCPtoUDP退出:", this.rip)
 		defer delete(mpstab, this.id)
@@ -1106,72 +1195,53 @@ func (this *mpsinfo) t2u() {
 			if err != nil {
 				return
 			}
-			go t2u1(conn, this.rip, this.psw)
+			go ututu1(conn, this.rip)
 		}
 	}()
 }
 
-func (this *mpsinfo) u2t() {
-	go func(this *mpsinfo) {
+func (this *mpsinfo) utuut() {
+	var utreq chan utdata = make(chan utdata, 100)
+	go func(this *mpsinfo, utreq chan utdata) {
 		for notquit && this.running {
 			select {
-			case u2tdata := <-u2treq:
+			case u2tdata := <-utreq:
 				id := u2tdata.udpaddr.String()
-				if u2ttab[id] == nil {
-					conn2, err := net.Dial("tcp", this.rip)
+				value, ok := uttab[id]
+				if !ok {
+					conn2, err := net.DialTimeout("tcp", this.rip, time.Second)
 					if err != nil {
-						fmt.Println("u2t conn2 err" + err.Error())
+						fmt.Println("utuu2t conn2 err" + err.Error())
 						continue
 					}
-					u2ttab[id] = conn2
+					tutidreq := make(chan byte)
+					value = &uttabdata{conn: conn2, id: 0, tutidreq: tutidreq}
+					uttab[id] = value
 				}
-				conn2 := u2ttab[id]
+				conn2 := (*value).conn
 				_, err := conn2.Write(u2tdata.buf)
 				if err != nil {
 					conn2.Close()
-					u2ttab[id] = nil
+					delete(uttab, id)
 					continue
 				}
-				go u2t1(u2tdata.udplistener, u2tdata.udpaddr, conn2)
+				go utuut1(u2tdata.udplistener, u2tdata.udpaddr, conn2)
 			}
 		}
-	}(this)
-	go func() {
-		defer fmt.Println("UDPtoTCP退出:", this.rip)
-		defer delete(mpstab, this.id)
-		defer recover()
-		//监听地址
-		udpAddr, err := net.ResolveUDPAddr("udp4", this.lip)
-		if err != nil {
-			return
-		}
-		//监听连接
-		udpListener, err := net.ListenUDP("udp4", udpAddr)
-		if err != nil {
-			return
-		}
-		buf := make([]byte, RECV_BUF_LEN)
-
-		for notquit && this.running {
-			n, udpaddr, err := udpListener.ReadFromUDP(buf)
-			if err != nil {
-				continue
-			}
-			u2treq <- u2tdata{udplistener: udpListener, udpaddr: udpaddr, buf: buf[:n]}
-		}
-	}()
+	}(this, utreq)
+	go uttoreq(this, utreq)
 }
 
-func t2u1(conn net.Conn, rip string, psw string) { //执行转发
+func ututu1(conn net.Conn, rip string) { //执行转发
 	defer recover()
-	udpAddr, err := net.ResolveUDPAddr("udp4", rip)
+	udpaddr, err := net.ResolveUDPAddr("udp4", rip)
 	if err != nil {
 		conn.Close()
 		return
 	}
 
 	//udp连接
-	udpConn, err := net.DialUDP("udp4", nil, udpAddr)
+	udpConn, err := net.DialUDP("udp4", nil, udpaddr)
 	if err != nil {
 		conn.Close()
 		return
@@ -1180,7 +1250,7 @@ func t2u1(conn net.Conn, rip string, psw string) { //执行转发
 	go Atob(udpConn, conn, "")
 }
 
-func u2t1(conn1 *net.UDPConn, udpaddr *net.UDPAddr, conn2 net.Conn) {
+func utuut1(conn1 *net.UDPConn, udpaddr *net.UDPAddr, conn2 net.Conn) { //utu ut back
 	bufab := make([]byte, RECV_BUF_LEN)
 	defer recover()
 	defer func() {
@@ -1188,7 +1258,6 @@ func u2t1(conn1 *net.UDPConn, udpaddr *net.UDPAddr, conn2 net.Conn) {
 		conn2.Close()
 	}()
 	abnumad <- true
-
 	for notquit {
 		conn2.SetDeadline(time.Now().Add(CONNTO_MAX))
 		n, err := conn2.Read(bufab)
@@ -1196,9 +1265,7 @@ func u2t1(conn1 *net.UDPConn, udpaddr *net.UDPAddr, conn2 net.Conn) {
 		if n <= 0 || err != nil {
 			return
 		}
-
 		n, err = conn1.WriteToUDP(bufab[:n], udpaddr)
-
 		if n <= 0 || err != nil {
 			return
 		}
@@ -1214,16 +1281,12 @@ func Atob(conn, conn2 net.Conn, psw string) { //数据转发
 	defer func() {
 		abnumad <- false
 	}()
-
 	pswlen := len(psw)
 	j := 0
 	abnumad <- true
-
 	for notquit {
-
 		conn.SetDeadline(time.Now().Add(CONNTO_MAX))
 		n, err := conn.Read(bufab)
-
 		if n <= 0 || err != nil {
 			return
 		}
@@ -1236,14 +1299,12 @@ func Atob(conn, conn2 net.Conn, psw string) { //数据转发
 				}
 			}
 		}
-
 		n, err = conn2.Write(bufab[0:n])
 		if n <= 0 || err != nil {
 			return
 		}
 		req <- n
 	}
-
 }
 
 func dbg(str ...interface{}) {
@@ -1266,4 +1327,216 @@ func xor(str, psw string) string { //异或加密
 	}
 
 	return string(buf)
+}
+
+func (this *mpsinfo) tuttu() {
+	go func() {
+		defer fmt.Println("TCPtoUDP退出:", this.rip)
+		defer delete(mpstab, this.id)
+		defer recover()
+
+		for notquit && this.running {
+			conn, err := this.listener.Accept() //接受连接
+			if err != nil {
+				return
+			}
+			go tuttu1(conn, this.rip)
+		}
+	}()
+}
+
+func tuttu1(conn net.Conn, rip string) { //tut的tu发出
+	var tutidreq chan byte = make(chan byte) //用于验证重发
+	udpaddr, err := net.ResolveUDPAddr("udp4", rip)
+	if err != nil {
+		conn.Close()
+		return
+	}
+	conn2, err := net.DialUDP("udp4", nil, udpaddr)
+	if err != nil {
+		conn.Close()
+		return
+	}
+	go tua(conn, conn2, nil, tutidreq)    //通用的tu转发
+	go tuttu2(conn2, nil, conn, tutidreq) //tut的tu返回
+
+}
+
+func tua(conn net.Conn, conn2 *net.UDPConn, udpaddr *net.UDPAddr, tutidreq chan byte) { //通用的tu转发
+	bufa := make([]byte, RECV_BUF_LEN-1)
+	defer recover()
+	defer conn.Close()
+	defer func() {
+		abnumad <- false
+	}()
+	var id byte = 1
+	abnumad <- true
+
+	for notquit {
+		conn.SetDeadline(time.Now().Add(CONNTO_MAX))
+		n, err := conn.Read(bufa)
+		if n <= 0 || err != nil {
+			return
+		}
+		bufb := append([]byte{id}, bufa[:n]...)
+		if udpaddr == nil {
+			n, err = conn2.Write(bufb)
+		} else {
+			n, err = conn2.WriteToUDP(bufb, udpaddr)
+		}
+		if n <= 0 || err != nil {
+			fmt.Println("tu err", err)
+			return
+		}
+		var ida byte = 0
+		for i := 0; i < 3; {
+			after := time.After(time.Second)
+			select {
+			case <-after:
+				after = time.After(time.Second)
+				i++
+				//重发
+				if udpaddr == nil {
+					n, err = conn2.Write(bufb)
+				} else {
+					n, err = conn2.WriteToUDP(bufb, udpaddr)
+				}
+				if n <= 0 || err != nil {
+					fmt.Println("resend err:", err)
+					return
+				}
+			case ida = <-tutidreq:
+				if ida == id {
+					ida = id
+					i = 3
+				} else {
+					fmt.Println("udp received other one:", ida, id)
+				}
+
+			}
+
+		}
+		if ida != id { //重试3次都不对
+			return
+		}
+		req <- n
+		if id == 255 {
+			id = 1
+		} else {
+			id++
+		}
+	}
+}
+
+func (this *mpsinfo) tutut() {
+	var utreq chan utdata = make(chan utdata, 100)
+	go func(this *mpsinfo, utreq chan utdata) {
+		for notquit && this.running {
+			select {
+			case u2tdata := <-utreq:
+				id := u2tdata.udpaddr.String()
+				value, ok := uttab[id]
+				if !ok {
+					conn2, err := net.Dial("tcp", this.rip)
+					if err != nil {
+						fmt.Println("utuu2t conn2 err" + err.Error())
+						continue
+					}
+					tutidreq := make(chan byte, 1)
+					value = &uttabdata{conn: conn2, id: 0, tutidreq: tutidreq}
+					uttab[id] = value
+					go tua(conn2, u2tdata.udplistener, u2tdata.udpaddr, tutidreq)
+				}
+				conn2 := (*value).conn
+				n := tututa(u2tdata.buf, u2tdata.udplistener, u2tdata.udpaddr, conn2, (*value).tutidreq, &(*value).id)
+				switch n {
+				case 1, 2:
+					continue
+				case 3:
+					conn2.Close()
+				}
+			}
+		}
+	}(this, utreq)
+	go uttoreq(this, utreq)
+}
+
+func tuttu2(conn *net.UDPConn, udpaddr *net.UDPAddr, conn2 net.Conn, tutidreq chan byte) { //tut的tu返回
+	defer conn.Close()
+	defer conn2.Close()
+	bufa := make([]byte, RECV_BUF_LEN)
+	defer recover()
+	defer func() {
+		abnumad <- false
+	}()
+	var id byte
+	abnumad <- true
+
+	for notquit {
+		conn.SetDeadline(time.Now().Add(CONNTO_MAX))
+		n, err := conn.Read(bufa)
+		if n <= 0 || err != nil {
+			return
+		}
+		n = tututa(bufa[:n], conn, udpaddr, conn2, tutidreq, &id)
+		switch n {
+		case 1, 2:
+			continue
+		case 3:
+			return
+		}
+		if id == 255 {
+			id = 0
+		} else {
+			id++
+		}
+	}
+}
+func tututa(bufa []byte, conn *net.UDPConn, udpaddr *net.UDPAddr, conn2 net.Conn, tutidreq chan byte, id *byte) int { //tut的udp接收处理
+	n := len(bufa)
+	if n == 1 {
+		tutidreq <- bufa[0]
+		return 1 //收到反馈
+	}
+	if udpaddr == nil {
+		conn.Write(bufa[0:1])
+	} else {
+		conn.WriteToUDP(bufa[0:1], udpaddr)
+	}
+	/*
+		if *id == bufa[0] {
+			return 2 //重复信息
+		}*/
+	*id = bufa[0]
+
+	n, err := conn2.Write(bufa[1:])
+	if n <= 0 || err != nil {
+		return 3 //错误
+	}
+	req <- n
+	return 0 //正常
+}
+func uttoreq(this *mpsinfo, utreq chan utdata) {
+	defer fmt.Println("UDPtoTCP退出:", this.rip)
+	defer delete(mpstab, this.id)
+	defer recover()
+	//监听地址
+	udpaddr, err := net.ResolveUDPAddr("udp4", this.lip)
+	if err != nil {
+		return
+	}
+	//监听连接
+	udpListener, err := net.ListenUDP("udp4", udpaddr)
+	if err != nil {
+		return
+	}
+	buf := make([]byte, RECV_BUF_LEN)
+
+	for notquit && this.running {
+		n, udpaddr, err := udpListener.ReadFromUDP(buf)
+		if err != nil {
+			continue
+		}
+		utreq <- utdata{udplistener: udpListener, udpaddr: udpaddr, buf: buf[:n], this: this}
+	}
 }
