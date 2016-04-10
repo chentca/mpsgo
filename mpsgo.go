@@ -537,7 +537,7 @@ func inputer(conn net.Conn, this *mpsinfo) { //cmd交互界面
 			if rip == "*" || len(rip) == 0 {
 				continue
 			}
-			psw := inputerin("转发密码或干扰码(密码小于:2,147,483,647 默认为0不加密)*取消:", conn)
+			psw := inputerin("转发密码或干扰码(密码可用任意英文字母)*取消:", conn)
 
 			if psw == "*" {
 				continue
@@ -748,7 +748,7 @@ func inputer(conn net.Conn, this *mpsinfo) { //cmd交互界面
 			inputerout(mpstab[mpsid].info, conn)
 			inputerout(list(), conn)
 
-		case "13": //TUT-T2U
+		case "12": //TUT-T2U
 			var lip, rip string
 			lip = inputerin("请输入本地端口(如：127.0.0.1:80 或 0.0.0.0:80)*取消:", conn)
 
@@ -772,7 +772,7 @@ func inputer(conn net.Conn, this *mpsinfo) { //cmd交互界面
 			inputerout(mpstab[mpsid].info, conn)
 			inputerout(list(), conn)
 
-		case "14": //TUT-U2T
+		case "13": //TUT-U2T
 			var lip, rip string
 			lip = inputerin("请输入本地端口(如：127.0.0.1:80 或 0.0.0.0:80)*取消:", conn)
 
