@@ -1369,7 +1369,11 @@ func tua(conn net.Conn, conn2 *net.UDPConn, udpaddr *net.UDPAddr, tutidreq chan 
 	defer func() {
 		abnumad <- false
 		delete(uttab, udpaddr.String())
+		if udpaddr == nil {
+			conn2.Close()
+		}
 	}()
+
 	var id byte = 1
 	abnumad <- true
 
@@ -1471,6 +1475,11 @@ func (this *mpsinfo) tutut() {
 func uta(udplistener *net.UDPConn, udpaddr *net.UDPAddr, conn2 net.Conn, tutidreq chan byte, bufreq chan []byte, name string, id *byte, this *mpsinfo) {
 	defer delete(uttab, name)
 	defer conn2.Close()
+	defer func() {
+		if udpaddr == nil {
+			udplistener.Close()
+		}
+	}()
 	var buf []byte
 	for notquit {
 		buf = <-bufreq
@@ -1488,12 +1497,14 @@ func uta(udplistener *net.UDPConn, udpaddr *net.UDPAddr, conn2 net.Conn, tutidre
 }
 
 func tuttu2(conn *net.UDPConn, udpaddr *net.UDPAddr, conn2 net.Conn, tutidreq chan byte) { //tut的tu返回
-	//defer conn.Close()
 	defer conn2.Close()
 	bufa := make([]byte, RECV_BUF_LEN)
 	defer recover()
 	defer func() {
 		abnumad <- false
+		if udpaddr == nil {
+			conn.Close()
+		}
 	}()
 	var id byte
 	abnumad <- true
