@@ -75,6 +75,7 @@ type uttabdata struct {
 	conn     net.Conn
 	id       byte
 	tutidreq chan byte
+	bufreq   chan []byte
 }
 
 type mpsinfo struct { //mps信息记录
@@ -1359,7 +1360,6 @@ func tuttu1(conn net.Conn, rip string) { //tut的tu发出
 	}
 	go tua(conn, conn2, nil, tutidreq)    //通用的tu转发
 	go tuttu2(conn2, nil, conn, tutidreq) //tut的tu返回
-
 }
 
 func tua(conn net.Conn, conn2 *net.UDPConn, udpaddr *net.UDPAddr, tutidreq chan byte) { //通用的tu转发
@@ -1368,6 +1368,7 @@ func tua(conn net.Conn, conn2 *net.UDPConn, udpaddr *net.UDPAddr, tutidreq chan 
 	defer conn.Close()
 	defer func() {
 		abnumad <- false
+		delete(uttab, udpaddr.String())
 	}()
 	var id byte = 1
 	abnumad <- true
@@ -1384,10 +1385,6 @@ func tua(conn net.Conn, conn2 *net.UDPConn, udpaddr *net.UDPAddr, tutidreq chan 
 		} else {
 			n, err = conn2.WriteToUDP(bufb, udpaddr)
 		}
-		if n <= 0 || err != nil {
-			fmt.Println("tu err", err)
-			return
-		}
 		var ida byte = 0
 		for i := 0; i < 3; {
 			after := time.After(time.Second)
@@ -1401,20 +1398,19 @@ func tua(conn net.Conn, conn2 *net.UDPConn, udpaddr *net.UDPAddr, tutidreq chan 
 				} else {
 					n, err = conn2.WriteToUDP(bufb, udpaddr)
 				}
-				if n <= 0 || err != nil {
-					fmt.Println("resend err:", err)
-					return
-				}
 			case ida = <-tutidreq:
 				if ida == id {
-					ida = id
 					i = 3
 				} else {
-					fmt.Println("udp received other one:", ida, id)
+					//fmt.Println("udp received other one:", ida, id)
+					if udpaddr == nil {
+						n, err = conn2.Write(bufb)
+					} else {
+						n, err = conn2.WriteToUDP(bufb, udpaddr)
+					}
+					//return
 				}
-
 			}
-
 		}
 		if ida != id { //重试3次都不对
 			return
@@ -1442,28 +1438,57 @@ func (this *mpsinfo) tutut() {
 						fmt.Println("utuu2t conn2 err" + err.Error())
 						continue
 					}
-					tutidreq := make(chan byte, 1)
-					value = &uttabdata{conn: conn2, id: 0, tutidreq: tutidreq}
+					tutidreq := make(chan byte, 3)
+					bufreq := make(chan []byte, 3)
+					value = &uttabdata{conn: conn2, id: 0, tutidreq: tutidreq, bufreq: bufreq}
 					uttab[id] = value
 					go tua(conn2, u2tdata.udplistener, u2tdata.udpaddr, tutidreq)
+					go uta(u2tdata.udplistener, u2tdata.udpaddr, conn2, tutidreq, bufreq, id, &(*value).id, this)
 				}
-				conn2 := (*value).conn
-				n := tututa(u2tdata.buf, u2tdata.udplistener, u2tdata.udpaddr, conn2, (*value).tutidreq, &(*value).id)
-				switch n {
-				case 1, 2:
-					continue
-				case 3:
-					delete(uttab, id)
-					conn2.Close()
-				}
+				value.bufreq <- u2tdata.buf
+				/*
+					conn2 := (*value).conn
+					if len(u2tdata.buf) == 0 {
+						conn2.Close()
+						delete(uttab, id)
+						continue
+					}
+					n := tututa(u2tdata.buf, u2tdata.udplistener, u2tdata.udpaddr, conn2, (*value).tutidreq, &(*value).id)
+					switch n {
+					case 1, 2:
+						continue
+					case 3:
+						delete(uttab, id)
+						conn2.Close()
+					}*/
+
 			}
 		}
 	}(this, utreq)
 	go uttoreq(this, utreq)
 }
 
+func uta(udplistener *net.UDPConn, udpaddr *net.UDPAddr, conn2 net.Conn, tutidreq chan byte, bufreq chan []byte, name string, id *byte, this *mpsinfo) {
+	defer delete(uttab, name)
+	defer conn2.Close()
+	var buf []byte
+	for notquit {
+		buf = <-bufreq
+		if len(buf) == 0 {
+			return
+		}
+		n := tututa(buf, udplistener, udpaddr, conn2, tutidreq, id)
+		switch n {
+		case 1, 2:
+			continue
+		case 3:
+			return
+		}
+	}
+}
+
 func tuttu2(conn *net.UDPConn, udpaddr *net.UDPAddr, conn2 net.Conn, tutidreq chan byte) { //tut的tu返回
-	defer conn.Close()
+	//defer conn.Close()
 	defer conn2.Close()
 	bufa := make([]byte, RECV_BUF_LEN)
 	defer recover()
