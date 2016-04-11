@@ -537,7 +537,7 @@ func inputer(conn net.Conn, this *mpsinfo) { //cmd交互界面
 			if rip == "*" || len(rip) == 0 {
 				continue
 			}
-			psw := inputerin("转发密码或干扰码(密码可用任意英文字母)*取消:", conn)
+			psw := inputerin("转发密码或干扰码(密码使用任意英文字符)*取消:", conn)
 
 			if psw == "*" {
 				continue
@@ -1453,6 +1453,7 @@ func (this *mpsinfo) tutut() {
 				case 1, 2:
 					continue
 				case 3:
+					delete(uttab, id)
 					conn2.Close()
 				}
 			}
@@ -1485,11 +1486,6 @@ func tuttu2(conn *net.UDPConn, udpaddr *net.UDPAddr, conn2 net.Conn, tutidreq ch
 		case 3:
 			return
 		}
-		if id == 255 {
-			id = 0
-		} else {
-			id++
-		}
 	}
 }
 func tututa(bufa []byte, conn *net.UDPConn, udpaddr *net.UDPAddr, conn2 net.Conn, tutidreq chan byte, id *byte) int { //tut的udp接收处理
@@ -1503,12 +1499,10 @@ func tututa(bufa []byte, conn *net.UDPConn, udpaddr *net.UDPAddr, conn2 net.Conn
 	} else {
 		conn.WriteToUDP(bufa[0:1], udpaddr)
 	}
-	/*
-		if *id == bufa[0] {
-			return 2 //重复信息
-		}*/
+	if bufa[0] == *id || bufa[0]-*id > 2 {
+		return 2 //重复信息
+	}
 	*id = bufa[0]
-
 	n, err := conn2.Write(bufa[1:])
 	if n <= 0 || err != nil {
 		return 3 //错误
