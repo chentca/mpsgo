@@ -1,6 +1,6 @@
 package main
 
-//ver 3.4.2 2016.4.15
+//ver 3.4.3 2016.4.18
 import (
 	"bufio"
 	"bytes"
@@ -16,7 +16,7 @@ import (
 )
 
 //GOGC = 50 //要在环境变量里修改 env
-const RECV_BUF_LEN = 4096
+const RECV_BUF_LEN = 10240
 const CONNTO_MIN = time.Second * 5
 const CONNTO_MID = time.Minute * 1
 const CONNTO_MAX = time.Minute * 2
@@ -1526,14 +1526,15 @@ func (this *mpsudp) read() {
 				this.tutidreq <- bufa[0]
 				continue //收到反馈
 			}
-			if id == bufa[0] {
-				fmt.Println("udp 重复信息丢弃。", id, bufa[:10])
-				continue
-			}
+
 			if this.udpaddr == nil {
 				this.udpconn.Write(bufa[:1])
 			} else {
 				this.udpconn.WriteToUDP(bufa[:1], this.udpaddr)
+			}
+			if id == bufa[0] {
+				fmt.Println("udp 重复信息丢弃。", id, bufa[:10])
+				continue
 			}
 			id = bufa[0]
 			//fmt.Println("udp read:", id)
@@ -1558,7 +1559,7 @@ func (this *mpsudp) write() {
 			for i := 0; i < 5; {
 				select {
 				case <-after:
-					after = time.After(time.Second)
+					after = time.After(time.Millisecond * 10)
 					i++
 					//重发
 					//fmt.Println("udp resend:", id)
@@ -1592,7 +1593,7 @@ func (this *mpsudp) write() {
 				id++
 			}
 			req <- len(buf) - 1
-			time.Sleep(time.Millisecond)
+			time.Sleep(time.Millisecond * 2)
 			//runtime.Gosched()
 		}
 	}()
