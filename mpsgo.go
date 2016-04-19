@@ -1,6 +1,6 @@
 package main
 
-//ver 3.4.3 2016.4.18
+//ver 3.4.3 2016.4.19
 import (
 	"bufio"
 	"bytes"
@@ -70,13 +70,13 @@ type tabreq struct {
 }
 
 type mpsudp struct {
-	indatareq, outdatareq chan []byte
-	tutidreq              chan byte
-	udpconn               *net.UDPConn
-	udpaddr               *net.UDPAddr
-	conn                  net.Conn
-	tuttab                *map[int]net.Conn
-	mpsinfo               *mpsinfo
+	indatareq, outdatareq, udpans chan []byte
+	tutidreq                      chan byte
+	udpconn                       *net.UDPConn
+	udpaddr                       *net.UDPAddr
+	conn                          net.Conn
+	tuttab                        *map[int]net.Conn
+	mpsinfo                       *mpsinfo
 }
 
 type utdata struct {
@@ -1357,9 +1357,6 @@ func (this *mpsinfo) tuttu() {
 		defer delete(mpstab, this.id)
 		defer recover()
 		tuttab := make(map[int]net.Conn)
-		indatareq := make(chan []byte)
-		outdatareq := make(chan []byte)
-		tutidreq := make(chan byte)
 		treq := make(chan tabreq)
 		//var id byte = 1
 		//udp拨号
@@ -1376,9 +1373,9 @@ func (this *mpsinfo) tuttu() {
 			return
 		}
 		//初始化mpsudp
-		mpsudpa := mpsudp{indatareq: indatareq, outdatareq: outdatareq, tutidreq: tutidreq, udpconn: conn2, tuttab: &tuttab, mpsinfo: this}
-		mpsudpa.write()
-		mpsudpa.read()
+		mpsudpa := mpsudp{udpconn: conn2, tuttab: &tuttab, mpsinfo: this}
+		mpsudpa.run()
+
 		go ut1(this, &mpsudpa, treq)
 		go treqf(treq, &tuttab)
 		var connid int = 1
@@ -1454,18 +1451,15 @@ func ut1(mpsinfoa *mpsinfo, mpsudpa *mpsudp, treq chan tabreq) { //ut
 func (this *mpsinfo) tutut() {
 	go func() {
 		tuttab := make(map[int]net.Conn)
-		indatareq := make(chan []byte)
-		outdatareq := make(chan []byte)
-		tutidreq := make(chan byte)
 		treq := make(chan tabreq)
-		//		var id byte = 1
+
 		udpaddr := new(net.UDPAddr)
-		mpsudpa := mpsudp{indatareq: indatareq, outdatareq: outdatareq, tutidreq: tutidreq, udpaddr: udpaddr, udpconn: this.udplistener, tuttab: &tuttab, mpsinfo: this}
-		mpsudpa.write()
-		mpsudpa.read()
+		mpsudpa := mpsudp{udpaddr: udpaddr, udpconn: this.udplistener, tuttab: &tuttab, mpsinfo: this}
+		_, outdata := mpsudpa.run()
+
 		go treqf(treq, &tuttab)
 		for notquit && this.running {
-			buf := <-outdatareq //ut
+			buf := <-outdata //ut
 			connid := int(buf[0])<<8 + int(buf[1])
 			conn, ok := tuttab[connid]
 			var err error
@@ -1508,8 +1502,13 @@ func uttoreq(this *mpsinfo, utreq chan utdata) {
 	}
 }
 
-func (this *mpsudp) read() {
-	go func() { //处理tu的返回
+func (this *mpsudp) run() (indata chan []byte, outdata chan []byte) {
+	this.indatareq = make(chan []byte)
+	this.outdatareq = make(chan []byte)
+	this.tutidreq = make(chan byte)
+	this.udpans = make(chan []byte)
+
+	go func() { //udpread
 		bufa := make([]byte, RECV_BUF_LEN+256)
 		defer recover()
 		var id byte = 255
@@ -1527,54 +1526,64 @@ func (this *mpsudp) read() {
 				continue //收到反馈
 			}
 
-			if this.udpaddr == nil {
-				this.udpconn.Write(bufa[:1])
-			} else {
-				this.udpconn.WriteToUDP(bufa[:1], this.udpaddr)
-			}
+			this.udpans <- []byte{bufa[0]}
+
 			if id == bufa[0] {
 				fmt.Println("udp 重复信息丢弃。", id, bufa[:10])
 				continue
 			}
 			id = bufa[0]
-			//fmt.Println("udp read:", id)
+
 			this.outdatareq <- bufa[1:n]
 		}
 	}()
-}
 
-func (this *mpsudp) write() {
-	go func() { //tudata发出纤程
+	go func() { //udpwrite
 		var id, ida byte = 1, 1
 		for notquit && this.mpsinfo.running {
-			buf := <-this.indatareq
-			buf = append([]byte{id}, buf...)
-			//fmt.Println("udp write:", id)
-			if this.udpaddr == nil {
-				this.udpconn.Write(buf)
-			} else {
-				this.udpconn.WriteToUDP(buf, this.udpaddr)
-			}
-			after := time.After(time.Second)
-			for i := 0; i < 5; {
-				select {
-				case <-after:
-					after = time.After(time.Millisecond * 10)
-					i++
-					//重发
-					//fmt.Println("udp resend:", id)
-					if this.udpaddr == nil {
-						this.udpconn.Write(buf)
-					} else {
-						this.udpconn.WriteToUDP(buf, this.udpaddr)
-					}
-				case ida = <-this.tutidreq:
-					if ida == id {
-						i = 5
-						//fmt.Println(id, "ok")
-					} else {
+			time.Sleep(time.Millisecond * 2)
+			select {
+			case ans := <-this.udpans:
+				if this.udpaddr == nil {
+					this.udpconn.Write(ans)
+				} else {
+					this.udpconn.WriteToUDP(ans, this.udpaddr)
+				}
+			case buf := <-this.indatareq:
+				buf = append([]byte{id}, buf...)
+				//fmt.Println("udp write:", id)
+				if this.udpaddr == nil {
+					this.udpconn.Write(buf)
+				} else {
+					this.udpconn.WriteToUDP(buf, this.udpaddr)
+				}
+				after := time.After(time.Second)
+				for i := 0; i < 5; {
+					select {
+					case ans := <-this.udpans:
+						if this.udpaddr == nil {
+							this.udpconn.Write(ans)
+						} else {
+							this.udpconn.WriteToUDP(ans, this.udpaddr)
+						}
+					case ida = <-this.tutidreq:
+						if ida == id {
+							i = 5
+							//fmt.Println(id, "ok")
+						} else {
+							i++
+							fmt.Println("udp received other one:", ida, id)
+							if this.udpaddr == nil {
+								this.udpconn.Write(buf)
+							} else {
+								this.udpconn.WriteToUDP(buf, this.udpaddr)
+							}
+						}
+					case <-after:
+						after = time.After(time.Millisecond * 10)
 						i++
-						fmt.Println("udp received other one:", ida, id)
+						//重发
+						//fmt.Println("udp resend:", id)
 						if this.udpaddr == nil {
 							this.udpconn.Write(buf)
 						} else {
@@ -1582,21 +1591,21 @@ func (this *mpsudp) write() {
 						}
 					}
 				}
+				if ida != id { //重试3次都不对
+					fmt.Println("mpsudp write err!id,ida", id, ida)
+					//continue
+				}
+				if id == 255 {
+					id = 1
+				} else {
+					id++
+				}
+				req <- len(buf) - 1
+
 			}
-			if ida != id { //重试3次都不对
-				fmt.Println("mpsudp write err!id,ida", id, ida)
-				//continue
-			}
-			if id == 255 {
-				id = 1
-			} else {
-				id++
-			}
-			req <- len(buf) - 1
-			time.Sleep(time.Millisecond * 2)
-			//runtime.Gosched()
 		}
 	}()
+	return this.indatareq, this.outdatareq
 }
 func itob(i int) []byte {
 	a := i
