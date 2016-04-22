@@ -1,6 +1,6 @@
 package main
 
-//ver 3.4.3 2016.4.19
+//ver 3.4.3 2016.4.22
 import (
 	"bufio"
 	"bytes"
@@ -1358,7 +1358,6 @@ func (this *mpsinfo) tuttu() {
 		defer recover()
 		tuttab := make(map[int]net.Conn)
 		treq := make(chan tabreq)
-		//var id byte = 1
 		//udp拨号
 		udpaddr, err := net.ResolveUDPAddr("udp4", this.rip)
 		if err != nil {
@@ -1390,7 +1389,6 @@ func (this *mpsinfo) tuttu() {
 				connid++
 			}
 			tuttab[connid] = conn
-			//fmt.Println("add tab", connid, tuttab)
 			go tu1(connid, conn, this, &mpsudpa, treq)
 			connid++
 		}
@@ -1541,7 +1539,6 @@ func (this *mpsudp) run() (indata chan []byte, outdata chan []byte) {
 	go func() { //udpwrite
 		var id, ida byte = 1, 1
 		for notquit && this.mpsinfo.running {
-			time.Sleep(time.Millisecond * 2)
 			select {
 			case ans := <-this.udpans:
 				if this.udpaddr == nil {
@@ -1601,7 +1598,7 @@ func (this *mpsudp) run() (indata chan []byte, outdata chan []byte) {
 					id++
 				}
 				req <- len(buf) - 1
-
+				time.Sleep(time.Millisecond * 2)
 			}
 		}
 	}()
