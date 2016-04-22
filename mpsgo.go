@@ -16,7 +16,7 @@ import (
 )
 
 //GOGC = 50 //要在环境变量里修改 env
-const RECV_BUF_LEN = 10240
+const RECV_BUF_LEN = 20480
 const CONNTO_MIN = time.Second * 5
 const CONNTO_MID = time.Minute * 1
 const CONNTO_MAX = time.Minute * 2
@@ -1502,7 +1502,7 @@ func uttoreq(this *mpsinfo, utreq chan utdata) {
 
 func (this *mpsudp) run() (indata chan []byte, outdata chan []byte) {
 	this.indatareq = make(chan []byte)
-	this.outdatareq = make(chan []byte)
+	this.outdatareq = make(chan []byte, 3)
 	this.tutidreq = make(chan byte)
 	this.udpans = make(chan []byte)
 
@@ -1524,15 +1524,14 @@ func (this *mpsudp) run() (indata chan []byte, outdata chan []byte) {
 				continue //收到反馈
 			}
 
-			this.udpans <- []byte{bufa[0]}
-
 			if id == bufa[0] {
 				fmt.Println("udp 重复信息丢弃。", id, bufa[:10])
+				this.udpans <- []byte{bufa[0]}
 				continue
 			}
 			id = bufa[0]
-
 			this.outdatareq <- bufa[1:n]
+			this.udpans <- []byte{bufa[0]}
 		}
 	}()
 
@@ -1598,7 +1597,7 @@ func (this *mpsudp) run() (indata chan []byte, outdata chan []byte) {
 					id++
 				}
 				req <- len(buf) - 1
-				time.Sleep(time.Millisecond * 2)
+				time.Sleep(time.Microsecond)
 			}
 		}
 	}()
