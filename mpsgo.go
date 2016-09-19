@@ -1,6 +1,6 @@
 package main
 
-//ver 3.4.4 2016.8.26
+//ver 3.5 2016.9.14
 import (
 	"bufio"
 	"bytes"
@@ -53,16 +53,25 @@ var autorun = "0"
 var okbyte = []byte{0}
 var quitcode = []byte{1}
 var notquit bool = true
-var mpsid, abnum int = 0, 0
+var mpsid, abnum, abwaitnum int = 0, 0, 0
 var reads int64 = 0
 var spd1, spd10, spd60 int64 = 0, 0, 0
 var req chan int = make(chan int, 100)       //统计转发数量
 var abnumad chan bool = make(chan bool, 100) //统计转发线程数量
+var abwait chan bool = make(chan bool, 100)  //统计转发线程空闲数量
 var mpstab map[int]*mpsinfo = make(map[int]*mpsinfo)
 var mpssvrtab map[string]*map[string]*[]net.Conn = make(map[string]*map[string]*[]net.Conn)
 var mpsdone map[string]int = make(map[string]int)
 var strlist1, strtab string
 var uttab map[string]*uttabdata = make(map[string]*uttabdata) //建立ut的对应关系
+var abfchan chan bool = make(chan bool, 100)
+var abdatechan chan *abdate = make(chan *abdate, 100)
+
+type abdate struct {
+	conn  net.Conn
+	conn2 net.Conn
+	psw   string
+}
 
 type tabreq struct {
 	i int
@@ -131,7 +140,7 @@ func main() {
 	go inputer(nil, &mpsinfo{running: true})
 	fmt.Println(strlist1)
 
-	var f bool
+	var f, w bool
 	after := time.After(time.Second)
 
 	for notquit {
@@ -140,7 +149,7 @@ func main() {
 			spd1 = reads - spdn
 			spdn = reads
 			spd10 = spd1/10 + spd10/10*9
-			spd60 = spd1/60 + spd60/60*59
+			spd60 = spd1/600 + spd60/600*599
 			after = time.After(time.Second)
 
 		case n = <-req: //统计转发数据量
@@ -151,6 +160,12 @@ func main() {
 				abnum++
 			} else {
 				abnum--
+			}
+		case w = <-abwait: //统计空闲纤程数量
+			if w == true {
+				abwaitnum++
+			} else {
+				abwaitnum--
 			}
 		}
 	}
@@ -169,8 +184,8 @@ func mpssource2(this *mpsinfo, conn net.Conn) { //mps的资源
 	}
 	conn2, err := net.DialTimeout("tcp", this.lip, DialTO)
 	if err == nil {
-		go Atob(conn, conn2, this.mpsname)
-		go Atob(conn2, conn, this.mpsname)
+		Atob(conn, conn2, this.mpsname)
+		Atob(conn2, conn, this.mpsname)
 	} else {
 		conn.Close()
 	}
@@ -250,8 +265,8 @@ func mpsrelay2(this *mpsinfo, conn net.Conn) { //当作mps的资源
 			*source = (*source)[1:]
 		}
 		conn2.Write(okbyte)
-		go Atob(conn, conn2, "")
-		go Atob(conn2, conn, "")
+		Atob(conn, conn2, "")
+		Atob(conn2, conn, "")
 
 		mpsdone[this.mpsname]++
 	} else {
@@ -288,8 +303,8 @@ func mpsbridge2(this *mpsinfo, conn net.Conn) { //当作mps的资源
 		conn2.Close()
 		return
 	}
-	go Atob(conn, conn2, "")
-	go Atob(conn2, conn, "")
+	Atob(conn, conn2, "")
+	Atob(conn2, conn, "")
 	mpsdone[this.mpsname]++
 }
 
@@ -329,8 +344,8 @@ func mpsuser2(conn net.Conn, this *mpsinfo) {
 		conn2.Close()
 		return
 	}
-	go Atob(conn, conn2, this.mpsname)
-	go Atob(conn2, conn, this.mpsname)
+	Atob(conn, conn2, this.mpsname)
+	Atob(conn2, conn, this.mpsname)
 
 }
 
@@ -387,8 +402,8 @@ func hand(source, user *[]net.Conn, mpsname string) { //撮合资源和用户连
 	conn.Write(okbyte)
 	conn2.Write(okbyte)
 
-	go Atob(conn, conn2, "")
-	go Atob(conn2, conn, "")
+	Atob(conn, conn2, "")
+	Atob(conn2, conn, "")
 
 	mpsdone[mpsname]++
 }
@@ -847,8 +862,8 @@ func (this *mpsinfo) telsvr() { //TelSvr服务
 func state() string {
 	var str string
 	str = "状态信息:\r\n"
-	str += fmt.Sprint(" NumCPU: ", Numcpu, " 转发纤程: ", abnum, "\r\n")
-	str += fmt.Sprint(" 转发数据: ", reads, " 速度：秒-10秒-分钟 ", spd1, spd10, spd60, "\r\n")
+	str += fmt.Sprint(" NumCPU: ", Numcpu, " 转发纤程: ", abnum, " 空闲:", abwaitnum, "\r\n")
+	str += fmt.Sprint(" 转发数据: ", reads, " 速度：秒-10秒-10分钟 ", spd1, spd10, spd60, "\r\n")
 	for k, v := range mpssvrtab {
 		str += fmt.Sprint("mpsname:", k, " 资源:", strconv.Itoa(len(*(*v)["s"])), " 用户:", strconv.Itoa(len(*(*v)["u"])), " 对接:", mpsdone[k], "\r\n")
 	}
@@ -1086,8 +1101,8 @@ func ptop2(conn net.Conn, rip string, psw string) { //执行转发
 		return
 	}
 
-	go Atob(conn, conn2, psw)
-	go Atob(conn2, conn, psw)
+	Atob(conn, conn2, psw)
+	Atob(conn2, conn, psw)
 }
 
 func (this *mpsinfo) ptop() { //端口转发服务
@@ -1140,8 +1155,8 @@ func s5(conn net.Conn, n int) {
 			conn2.Close()
 			return
 		}
-		go Atob(conn, conn2, "")
-		go Atob(conn2, conn, "")
+		Atob(conn, conn2, "")
+		Atob(conn2, conn, "")
 
 	case bytes.Equal(bufab[0:4], []byte{5, 1, 0, 3}): //域名请求
 		ip := fmt.Sprintf("%s:%d", string(bufab[5:bufab[4]+5]), int(bufab[n-2])<<8+int(bufab[n-1]))
@@ -1162,8 +1177,8 @@ func s5(conn net.Conn, n int) {
 			conn2.Close()
 			return
 		}
-		go Atob(conn, conn2, "")
-		go Atob(conn2, conn, "")
+		Atob(conn, conn2, "")
+		Atob(conn2, conn, "")
 
 	default:
 		conn.Close()
@@ -1268,8 +1283,8 @@ func ututu1(conn net.Conn, rip string) { //执行转发
 		conn.Close()
 		return
 	}
-	go Atob(conn, udpConn, "")
-	go Atob(udpConn, conn, "")
+	Atob(conn, udpConn, "")
+	Atob(udpConn, conn, "")
 }
 
 func utuut1(conn1 *net.UDPConn, udpaddr *net.UDPAddr, conn2 net.Conn) { //utu ut back
@@ -1295,22 +1310,65 @@ func utuut1(conn1 *net.UDPConn, udpaddr *net.UDPAddr, conn2 net.Conn) { //utu ut
 	}
 }
 
-func Atob(conn, conn2 net.Conn, psw string) { //数据转发
-	bufab := make([]byte, RECV_BUF_LEN)
+func Atob(conn, conn2 net.Conn, psw string) {
+	var newabdate *abdate
+	newabdate = new(abdate)
+	newabdate.conn = conn
+	newabdate.conn2 = conn2
+	newabdate.psw = psw
+	abdatechan <- newabdate
+	select {
+	case <-abfchan:
+		abwait <- false
+	default:
+		go Atobf()
+	}
+}
+
+func Atobf() { //数据转发
+	abnumad <- true
+	lquit := false
+	var bufab []byte = make([]byte, RECV_BUF_LEN)
+	var labdate *abdate
+	var conn net.Conn
+	var conn2 net.Conn
+	var psw string
 	defer recover()
-	defer conn.Close()
-	defer conn2.Close()
 	defer func() {
 		abnumad <- false
 	}()
+	labdate = <-abdatechan
+	conn = labdate.conn
+	conn2 = labdate.conn2
+	psw = labdate.psw
 	pswlen := len(psw)
 	j := 0
-	abnumad <- true
+
 	for notquit {
 		//conn.SetDeadline(time.Now().Add(CONNTO_MAX))
 		n, err := conn.Read(bufab)
 		if n <= 0 || err != nil {
-			return
+			conn.Close()
+			conn2.Close()
+			conn = nil
+			conn2 = nil
+			labdate = nil
+			select {
+			case abfchan <- true:
+				abwait <- true
+			default:
+				lquit = true
+			}
+			if lquit {
+				return
+			}
+			labdate = <-abdatechan
+			conn = labdate.conn
+			conn2 = labdate.conn2
+			psw = labdate.psw
+			pswlen = len(psw)
+			j = 0
+			continue
 		}
 		if psw != "" {
 			for i := 0; i < n; i++ {
@@ -1323,7 +1381,27 @@ func Atob(conn, conn2 net.Conn, psw string) { //数据转发
 		}
 		n, err = conn2.Write(bufab[0:n])
 		if n <= 0 || err != nil {
-			return
+			conn.Close()
+			conn2.Close()
+			conn = nil
+			conn2 = nil
+			labdate = nil
+			select {
+			case abfchan <- true:
+				abwait <- true
+			default:
+				lquit = true
+			}
+			if lquit {
+				return
+			}
+			labdate = <-abdatechan
+			conn = labdate.conn
+			conn2 = labdate.conn2
+			psw = labdate.psw
+			pswlen = len(psw)
+			j = 0
+			continue
 		}
 		req <- n
 	}
