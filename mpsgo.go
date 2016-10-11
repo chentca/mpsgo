@@ -1,6 +1,6 @@
 package main
 
-//ver 3.5 2016.9.14
+//ver 3.5.1 2016.10.11
 import (
 	"bufio"
 	"bytes"
@@ -686,6 +686,10 @@ func inputer(conn net.Conn, this *mpsinfo) { //cmd交互界面
 			if lip == "*" || len(lip) == 0 {
 				continue
 			}
+			psw := inputerin("连接密码（*取消:）", conn)
+			if psw == "*" {
+				continue
+			}
 			var listener, err = net.Listen("tcp", lip)
 			if err != nil {
 				inputerout("启动Telsvr失败:"+err.Error(), conn)
@@ -693,7 +697,7 @@ func inputer(conn net.Conn, this *mpsinfo) { //cmd交互界面
 			}
 
 			mpsid++
-			mpstab[mpsid] = &mpsinfo{lip: lip, listener: listener, ftype: 10, info: " TelSvr服务: " + lip, id: mpsid, running: true}
+			mpstab[mpsid] = &mpsinfo{lip: lip, listener: listener, ftype: 10, info: " TelSvr服务: " + lip, id: mpsid, psw: psw, running: true}
 			mpstab[mpsid].telsvr()
 			inputerout("TelSvr服务开启: "+lip, conn)
 			inputerout(list(), conn)
@@ -831,6 +835,12 @@ func inputer(conn net.Conn, this *mpsinfo) { //cmd交互界面
 			inputerout(mpstab[mpsid].info, conn)
 			inputerout(list(), conn)
 
+		case "0":
+			if conn == nil {
+				continue
+			}
+			conn.Close()
+
 		default: //help
 			if conn != nil && inputstr == "0" {
 				return
@@ -852,6 +862,11 @@ func (this *mpsinfo) telsvr() { //TelSvr服务
 			if err != nil {
 				fmt.Println("TelSvr接收错误", err)
 				return
+			}
+			pswipt := telsvrinputer("psw:", conn) //验证密码
+			if pswipt != this.psw {
+				conn.Close()
+				continue
 			}
 			fmt.Println("TelSvr接收新连接。", conn.RemoteAddr())
 			go inputer(conn, this)
@@ -890,7 +905,7 @@ func saveini() { //保存配置
 		case 3, 6, 7, 8, 9, 11, 12, 13, 14:
 			wstr(ini, v.rip)
 		}
-		if v.ftype == 3 {
+		if v.ftype == 3 || v.ftype == 10 {
 			wstr(ini, v.psw)
 		}
 		switch v.ftype {
@@ -1009,13 +1024,14 @@ func loadini() {
 			fmt.Println(mpstab[mpsid].info)
 		case "10":
 			lip := iniloadln(r)
+			psw := iniloadln(r)
 			listener, err = net.Listen("tcp", lip)
 			if err != nil {
 				fmt.Println("启动Telsvr服务失败:" + err.Error())
 				continue
 			}
 			mpsid++
-			mpstab[mpsid] = &mpsinfo{lip: lip, listener: listener, ftype: 10, info: " TelSvr服务: " + lip, id: mpsid, running: true}
+			mpstab[mpsid] = &mpsinfo{lip: lip, listener: listener, ftype: 10, info: " TelSvr服务: " + lip, id: mpsid, psw: psw, running: true}
 			mpstab[mpsid].telsvr()
 			fmt.Println(mpstab[mpsid].info)
 
