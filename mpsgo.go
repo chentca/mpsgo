@@ -1,6 +1,6 @@
 package main
 
-//ver 3.5.1 2016.10.11
+//ver 3.5.2 2016.10.17
 import (
 	"bufio"
 	"bytes"
@@ -17,9 +17,9 @@ import (
 
 //GOGC = 50 //要在环境变量里修改 env
 const RECV_BUF_LEN = 20480
-const CONNTO_MIN = time.Second * 5
-const CONNTO_MID = time.Minute * 1
-const CONNTO_MAX = time.Minute * 2
+const CONNTO_MIN = time.Second * 10
+const CONNTO_MID = time.Minute * 2
+const CONNTO_MAX = time.Hour * 2
 const DialTO = time.Second * 5
 
 var strlist0 []string = []string{
@@ -175,7 +175,6 @@ func main() {
 func mpssource2(this *mpsinfo, conn net.Conn) { //mps的资源
 	buf := make([]byte, 1)
 	conn.Write(append([]byte{1}, []byte(this.mpsname)...)) //type source
-	//conn.SetDeadline(time.Now().Add(CONNTO_MAX))
 	conn.Read(buf)
 
 	if buf[0] != 0 {
@@ -239,7 +238,6 @@ func mpsrelay2(this *mpsinfo, conn net.Conn) { //当作mps的资源
 	dbg("send source:", this.info)
 	buf := make([]byte, 1)
 	conn.Write(append([]byte{1}, []byte(this.mpsname)...)) //type source
-	//conn.SetDeadline(time.Now().Add(CONNTO_MAX))
 	conn.Read(buf)
 
 	if buf[0] != 0 {
@@ -280,7 +278,6 @@ func mpsbridge2(this *mpsinfo, conn net.Conn) { //当作mps的资源
 	dbg("send source:", this.info)
 	buf := make([]byte, 1)
 	conn.Write(append([]byte{1}, []byte(this.mpsname)...)) //type source
-	//conn.SetDeadline(time.Now().Add(CONNTO_MAX))
 	conn.Read(buf)
 
 	if buf[0] != 0 {
@@ -296,7 +293,7 @@ func mpsbridge2(this *mpsinfo, conn net.Conn) { //当作mps的资源
 		return
 	}
 	conn2.Write(append([]byte{2}, []byte(this.mpsname)...)) //type user
-	//conn2.SetDeadline(time.Now().Add(CONNTO_MAX))
+	conn2.SetDeadline(time.Now().Add(CONNTO_MIN))
 	conn2.Read(buf)
 	if buf[0] != 0 {
 		conn.Close()
@@ -337,7 +334,7 @@ func mpsuser2(conn net.Conn, this *mpsinfo) {
 		return
 	}
 
-	//conn2.SetDeadline(time.Now().Add(CONNTO_MAX))
+	conn2.SetDeadline(time.Now().Add(CONNTO_MIN))
 	_, err = conn2.Read(buf)
 	if err != nil || buf[0] != 0 {
 		conn.Close()
@@ -359,12 +356,12 @@ func mpsone(this *mpsinfo, next callback) {
 			if err == nil {
 				break
 			}
-			time.Sleep(5 * time.Second)
-
+			time.Sleep(30 * time.Second)
 		}
 		if this.running == false {
 			return
 		}
+		conn.SetDeadline(time.Now().Add(CONNTO_MID))
 		next(this, conn)
 	}
 
@@ -477,7 +474,6 @@ func telsvrinputer(str1 string, conn net.Conn) string { //命令行交互
 	buf := make([]byte, 1)
 	var str string = ""
 	for {
-		//conn.SetDeadline(time.Now().Add(CONNTO_MAX))
 		n, err := conn.Read(buf)
 		if n == 0 || err != nil {
 			return "0"
@@ -523,6 +519,9 @@ func inputer(conn net.Conn, this *mpsinfo) { //cmd交互界面
 	var inputint int
 	for notquit && this.running {
 		inputstr = inputerin("", conn)
+		if conn != nil {
+			conn.SetDeadline(time.Now().Add(CONNTO_MID))
+		}
 		switch inputstr {
 		case "1": //list
 			if len(mpstab) == 0 {
@@ -1146,7 +1145,6 @@ func s5(conn net.Conn, n int) {
 		conn.Close()
 		return
 	}
-	//conn.SetDeadline(time.Now().Add(CONNTO_MAX))
 	n, err = conn.Read(bufab)
 	if n == 0 || err != nil {
 		conn.Close()
@@ -1204,14 +1202,13 @@ func s5(conn net.Conn, n int) {
 func socksswich(conn net.Conn) { //判断代理类型
 	defer recover()
 	bufab := make([]byte, RECV_BUF_LEN)
-	//conn.SetDeadline(time.Now().Add(CONNTO_MAX))
+	conn.SetDeadline(time.Now().Add(CONNTO_MIN))
 	n, err := conn.Read(bufab)
 	if bytes.Equal(bufab[0:2], []byte{5, 1}) && err == nil { //socks5
 		s5(conn, n)
 		return
 	}
 	conn.Close()
-
 }
 
 func (this *mpsinfo) socks45() {
@@ -1327,6 +1324,8 @@ func utuut1(conn1 *net.UDPConn, udpaddr *net.UDPAddr, conn2 net.Conn) { //utu ut
 }
 
 func Atob(conn, conn2 net.Conn, psw string) {
+	conn.SetDeadline(time.Now().Add(CONNTO_MAX))
+	conn2.SetDeadline(time.Now().Add(CONNTO_MAX))
 	var newabdate *abdate
 	newabdate = new(abdate)
 	newabdate.conn = conn
@@ -1361,7 +1360,6 @@ func Atobf() { //数据转发
 	j := 0
 
 	for notquit {
-		//conn.SetDeadline(time.Now().Add(CONNTO_MAX))
 		n, err := conn.Read(bufab)
 		if n <= 0 || err != nil {
 			conn.Close()
@@ -1420,6 +1418,8 @@ func Atobf() { //数据转发
 			continue
 		}
 		req <- n
+		conn.SetDeadline(time.Now().Add(CONNTO_MAX))
+		conn2.SetDeadline(time.Now().Add(CONNTO_MAX))
 	}
 }
 
