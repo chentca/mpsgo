@@ -185,7 +185,6 @@ func mpssource2(this *mpsinfo, conn net.Conn) { //mps的资源
 	}
 	conn.SetDeadline(time.Now().Add(CONNTO_MAX))
 	conn.Read(buf1)
-	fmt.Println(buf[0], buf1[0])
 	if buf1[0] != 11 {
 		conn.Close()
 		time.Sleep(time.Second)
