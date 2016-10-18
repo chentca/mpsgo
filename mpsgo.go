@@ -1,6 +1,6 @@
 package main
 
-//ver 3.5.2 2016.10.17
+//ver 3.6 2016.10.18
 import (
 	"bufio"
 	"bytes"
@@ -50,7 +50,8 @@ var dbgflag bool = false
 var Numcpu int = runtime.NumCPU()
 var mpsini os.File
 var autorun = "0"
-var okbyte = []byte{0}
+var okbyte = []byte{10}
+var okbyte1 = []byte{11}
 var quitcode = []byte{1}
 var notquit bool = true
 var mpsid, abnum, abwaitnum int = 0, 0, 0
@@ -174,11 +175,20 @@ func main() {
 
 func mpssource2(this *mpsinfo, conn net.Conn) { //mps的资源
 	buf := make([]byte, 1)
+	buf1 := make([]byte, 1)
 	conn.Write(append([]byte{1}, []byte(this.mpsname)...)) //type source
 	conn.Read(buf)
-
-	if buf[0] != 0 {
+	if buf[0] != 10 {
 		conn.Close()
+		time.Sleep(time.Second)
+		return
+	}
+	conn.SetDeadline(time.Now().Add(CONNTO_MAX))
+	conn.Read(buf1)
+	fmt.Println(buf[0], buf1[0])
+	if buf1[0] != 11 {
+		conn.Close()
+		time.Sleep(time.Second)
 		return
 	}
 	conn2, err := net.DialTimeout("tcp", this.lip, DialTO)
@@ -187,6 +197,7 @@ func mpssource2(this *mpsinfo, conn net.Conn) { //mps的资源
 		Atob(conn2, conn, this.mpsname)
 	} else {
 		conn.Close()
+		time.Sleep(time.Second)
 	}
 }
 
@@ -204,7 +215,7 @@ func mpssvr21(conn net.Conn, mpsname string) { //资源握手判断
 	if len(*source) > 1 {
 		conn = (*source)[0]
 		*source = (*source)[1:]
-		conn.Write(quitcode)
+		//conn.Write(quitcode)
 		conn.Close()
 	}
 	if len(*user) > 0 {
@@ -226,7 +237,7 @@ func mpssvr22(conn net.Conn, mpsname string) { //用户握手判断
 	if len(*user) > 60 {
 		conn = (*user)[0]
 		*user = (*user)[1:]
-		conn.Write(quitcode)
+		//conn.Write(quitcode)
 		conn.Close()
 	}
 	if len(*source) > 0 {
@@ -239,9 +250,16 @@ func mpsrelay2(this *mpsinfo, conn net.Conn) { //当作mps的资源
 	buf := make([]byte, 1)
 	conn.Write(append([]byte{1}, []byte(this.mpsname)...)) //type source
 	conn.Read(buf)
-
-	if buf[0] != 0 {
+	if buf[0] != 10 {
 		conn.Close()
+		time.Sleep(time.Second)
+		return
+	}
+	conn.SetDeadline(time.Now().Add(CONNTO_MAX))
+	conn.Read(buf)
+	if buf[0] != 11 {
+		conn.Close()
+		time.Sleep(time.Second)
 		return
 	}
 
@@ -262,14 +280,15 @@ func mpsrelay2(this *mpsinfo, conn net.Conn) { //当作mps的资源
 		} else {
 			*source = (*source)[1:]
 		}
-		conn2.Write(okbyte)
+		conn2.Write(okbyte1)
 		Atob(conn, conn2, "")
 		Atob(conn2, conn, "")
 
 		mpsdone[this.mpsname]++
 	} else {
-		conn.Write(quitcode)
+		//conn.Write(quitcode)
 		conn.Close()
+		time.Sleep(time.Second)
 	}
 
 }
@@ -279,9 +298,16 @@ func mpsbridge2(this *mpsinfo, conn net.Conn) { //当作mps的资源
 	buf := make([]byte, 1)
 	conn.Write(append([]byte{1}, []byte(this.mpsname)...)) //type source
 	conn.Read(buf)
-
-	if buf[0] != 0 {
+	if buf[0] != 10 {
 		conn.Close()
+		time.Sleep(time.Second)
+		return
+	}
+	conn.SetDeadline(time.Now().Add(CONNTO_MAX))
+	conn.Read(buf)
+	if buf[0] != 11 {
+		conn.Close()
+		time.Sleep(time.Second)
 		return
 	}
 
@@ -295,9 +321,17 @@ func mpsbridge2(this *mpsinfo, conn net.Conn) { //当作mps的资源
 	conn2.Write(append([]byte{2}, []byte(this.mpsname)...)) //type user
 	conn2.SetDeadline(time.Now().Add(CONNTO_MIN))
 	conn2.Read(buf)
-	if buf[0] != 0 {
+	if buf[0] != 10 {
 		conn.Close()
 		conn2.Close()
+		time.Sleep(time.Second)
+		return
+	}
+	conn2.Read(buf)
+	if buf[0] != 11 {
+		conn.Close()
+		conn2.Close()
+		time.Sleep(time.Second)
 		return
 	}
 	Atob(conn, conn2, "")
@@ -336,7 +370,13 @@ func mpsuser2(conn net.Conn, this *mpsinfo) {
 
 	conn2.SetDeadline(time.Now().Add(CONNTO_MIN))
 	_, err = conn2.Read(buf)
-	if err != nil || buf[0] != 0 {
+	if err != nil || buf[0] != 10 {
+		conn.Close()
+		conn2.Close()
+		return
+	}
+	_, err = conn2.Read(buf)
+	if err != nil || buf[0] != 11 {
 		conn.Close()
 		conn2.Close()
 		return
@@ -349,14 +389,22 @@ func mpsuser2(conn net.Conn, this *mpsinfo) {
 func mpsone(this *mpsinfo, next callback) {
 	var conn net.Conn
 	var err error
+	var retrynum int
 	for this.running {
+		retrynum = 1
 		for this.running {
 			dbg("send source")
 			conn, err = net.DialTimeout("tcp", this.rip, DialTO) //发出资源
 			if err == nil {
 				break
 			}
-			time.Sleep(30 * time.Second)
+
+			for i := 1; i < retrynum; i++ {
+				time.Sleep(time.Second * 5)
+			}
+			if retrynum < 12 {
+				retrynum++
+			}
 		}
 		if this.running == false {
 			return
@@ -396,8 +444,8 @@ func hand(source, user *[]net.Conn, mpsname string) { //撮合资源和用户连
 	} else {
 		*user = (*user)[1:]
 	}
-	conn.Write(okbyte)
-	conn2.Write(okbyte)
+	conn.Write(okbyte1)
+	conn2.Write(okbyte1)
 
 	Atob(conn, conn2, "")
 	Atob(conn2, conn, "")
@@ -417,9 +465,11 @@ func mpssvr2(conn net.Conn) {
 	mpsname := string(bufab[1:n])
 	switch bufab[0] { //第一次握手
 	case 1: //source
+		conn.Write(okbyte)
 		mpssvr21(conn, mpsname)
 
 	case 2: //user
+		conn.Write(okbyte)
 		mpssvr22(conn, mpsname)
 
 	default:
