@@ -1,6 +1,6 @@
 package main
 
-//ver 3.6 2016.10.18
+//ver 3.6.1 2016.10.28
 import (
 	"bufio"
 	"bytes"
@@ -65,8 +65,10 @@ var mpssvrtab map[string]*map[string]*[]net.Conn = make(map[string]*map[string]*
 var mpsdone map[string]int = make(map[string]int)
 var strlist1, strtab string
 var uttab map[string]*uttabdata = make(map[string]*uttabdata) //建立ut的对应关系
-var abfchan chan bool = make(chan bool, 100)
-var abdatechan chan *abdate = make(chan *abdate, 100)
+var abfchan chan bool = make(chan bool, 100)                  //控制重复使用的转发纤程“空闲”上限
+var abdatechan chan *abdate = make(chan *abdate, 100)         //记录需要转发的数据
+var spdchan10 chan int64 = make(chan int64, 10)               //用于计算网速
+var spdchan600 chan int64 = make(chan int64, 600)
 
 type abdate struct {
 	conn  net.Conn
@@ -114,6 +116,14 @@ type mpsinfo struct { //mps信息记录
 type callback func(this *mpsinfo, conn net.Conn)
 
 func main() {
+	//初始化网速计算变量
+	for i := 0; i < 9; i++ {
+		spdchan10 <- 0
+	}
+	for i := 0; i < 599; i++ {
+		spdchan600 <- 0
+	}
+
 	strlist1 = stradd(strlist0)
 	strtab = stradd(strtab0)
 	defer quiter()
@@ -149,8 +159,18 @@ func main() {
 		case <-after: //计算单位时间的传输速度
 			spd1 = reads - spdn
 			spdn = reads
-			spd10 = spd1/10 + spd10/10*9
-			spd60 = spd1/600 + spd60/600*599
+			spdchan10 <- spd1
+			spdchan600 <- spd1
+			hisspd := <-spdchan10 //只能取出来用，如果放在运算中会出现异常，chan持续减少直至锁死
+			spd10 = (spd10*10 - hisspd + spd1) / 10
+			if spd10 < 0 {
+				spd10 = 0
+			}
+			hisspd = <-spdchan600
+			spd60 = (spd60*600 - hisspd + spd1) / 600
+			if spd60 < 0 {
+				spd60 = 0
+			}
 			after = time.After(time.Second)
 
 		case n = <-req: //统计转发数据量
@@ -1416,10 +1436,11 @@ func Atobf() { //数据转发
 			conn = nil
 			conn2 = nil
 			labdate = nil
+			after := time.After(time.Minute * 30) //保留30分钟
 			select {
 			case abfchan <- true:
 				abwait <- true
-			default:
+			case <-after:
 				lquit = true
 			}
 			if lquit {
@@ -1449,10 +1470,11 @@ func Atobf() { //数据转发
 			conn = nil
 			conn2 = nil
 			labdate = nil
+			after := time.After(time.Minute * 30)
 			select {
 			case abfchan <- true:
 				abwait <- true
-			default:
+			case <-after:
 				lquit = true
 			}
 			if lquit {
