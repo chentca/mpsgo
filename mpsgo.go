@@ -1163,7 +1163,7 @@ func loadini() {
 			dbg(mpstab[mpsid].info)
 		}
 	}
-	fmt.Print(list())
+	//fmt.Print(list())
 }
 
 func readsinf() { //拟用于计算每秒网速
