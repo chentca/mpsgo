@@ -1,9 +1,10 @@
 package main
 
-//ver 3.6.1 2016.10.28
+//ver 3.6.2 2016.11.3
 import (
 	"bufio"
 	"bytes"
+	"flag"
 	"fmt"
 	"io"
 	"net"
@@ -47,6 +48,7 @@ var strtab0 []string = []string{"1:切换运行状态（自动保存恢复配置
 	"任意键:返回主菜单"}
 
 var dbgflag bool = false
+var hideflag bool = false
 var Numcpu int = runtime.NumCPU()
 var mpsini os.File
 var autorun = "0"
@@ -124,6 +126,12 @@ func main() {
 		spdchan600 <- 0
 	}
 
+	flag.Parse() //读取命令行
+	dbgflag = flag.Arg(0) == "dbg"
+
+	if dbgflag {
+		dbg("dbg on!")
+	}
 	strlist1 = stradd(strlist0)
 	strtab = stradd(strtab0)
 	defer quiter()
@@ -134,7 +142,7 @@ func main() {
 
 	ini, err := os.OpenFile("mpsgo.ini", os.O_RDWR|os.O_CREATE, 0666)
 	if err != nil {
-		fmt.Println("err=", err.Error())
+		dbg("err=", err.Error())
 		panic("Open ini file err!")
 	}
 	r := bufio.NewReader(ini)
@@ -148,9 +156,11 @@ func main() {
 		autorun = "0"
 	}
 	go readsinf()
-	go inputer(nil, &mpsinfo{running: true})
-	fmt.Println(strlist1)
 
+	if !hideflag {
+		go inputer(nil, &mpsinfo{running: true})
+		fmt.Println(strlist1)
+	}
 	var f, w bool
 	after := time.After(time.Second)
 
@@ -436,7 +446,7 @@ func mpsone(this *mpsinfo, next callback) {
 
 func (this *mpsinfo) mpsuser() { //mps资源使用者
 	go func() {
-		defer fmt.Println("MPS用户退出:", this.rip)
+		defer dbg("MPS用户退出:", this.rip)
 		defer recover()
 		defer delete(mpstab, this.id)
 		for notquit && this.running {
@@ -498,7 +508,7 @@ func mpssvr2(conn net.Conn) {
 
 func (this *mpsinfo) mpssvr() { //mps中转服务
 	go func() {
-		defer fmt.Println("MPS服务退出:", this.id)
+		defer dbg("MPS服务退出:", this.id)
 		defer delete(mpstab, this.id)
 		defer recover()
 
@@ -921,14 +931,14 @@ func inputer(conn net.Conn, this *mpsinfo) { //cmd交互界面
 
 func (this *mpsinfo) telsvr() { //TelSvr服务
 	go func() {
-		defer fmt.Println("TelSvr退出:", this.id)
+		defer dbg("TelSvr退出:", this.id)
 		defer delete(mpstab, this.id)
 		defer recover()
 
 		for notquit && this.running {
 			conn, err := this.listener.Accept() //接受连接
 			if err != nil {
-				fmt.Println("TelSvr接收错误", err)
+				dbg("TelSvr接收错误", err)
 				return
 			}
 			pswipt := telsvrinputer("psw:", conn) //验证密码
@@ -936,7 +946,7 @@ func (this *mpsinfo) telsvr() { //TelSvr服务
 				conn.Close()
 				continue
 			}
-			fmt.Println("TelSvr接收新连接。", conn.RemoteAddr())
+			dbg("TelSvr接收新连接。", conn.RemoteAddr())
 			go inputer(conn, this)
 		}
 	}()
@@ -1013,7 +1023,7 @@ func loadini() {
 			mpsid++
 			mpstab[mpsid] = &mpsinfo{listener: listener, ftype: 3, info: lip + "->" + rip + "psw:" + psw, lip: lip, rip: rip, psw: psw, id: mpsid, running: true}
 			mpstab[mpsid].ptop()
-			fmt.Println(mpstab[mpsid].info)
+			dbg(mpstab[mpsid].info)
 
 		case "4":
 			lip := iniloadln(r)
@@ -1026,7 +1036,7 @@ func loadini() {
 			mpsid++
 			mpstab[mpsid] = &mpsinfo{lip: lip, listener: listener, ftype: 4, info: " socks代理: " + lip, id: mpsid, running: true}
 			mpstab[mpsid].socks45()
-			fmt.Println(mpstab[mpsid].info)
+			dbg(mpstab[mpsid].info)
 
 		case "5":
 			lip := iniloadln(r)
@@ -1039,7 +1049,7 @@ func loadini() {
 			mpsid++
 			mpstab[mpsid] = &mpsinfo{lip: lip, listener: listener, ftype: 5, info: " MPS服务: " + lip, id: mpsid, running: true}
 			mpstab[mpsid].mpssvr()
-			fmt.Println(mpstab[mpsid].info)
+			dbg(mpstab[mpsid].info)
 
 		case "6":
 			lip := iniloadln(r)
@@ -1048,7 +1058,7 @@ func loadini() {
 			mpsid++
 			mpstab[mpsid] = &mpsinfo{lip: lip, rip: rip, ftype: 6, info: " MPS资源: " + lip + " mpsname:[" + mpsname + "]" + " 连接到: " + rip, id: mpsid, running: true, mpsname: mpsname}
 			mpstab[mpsid].mpssource()
-			fmt.Println(mpstab[mpsid].info)
+			dbg(mpstab[mpsid].info)
 
 		case "7":
 			lip := iniloadln(r)
@@ -1063,7 +1073,7 @@ func loadini() {
 			mpsid++
 			mpstab[mpsid] = &mpsinfo{lip: lip, rip: rip, listener: listener, ftype: 7, info: "MPS用户开启:" + lip + "mpsname:[" + mpsname + "]", id: mpsid, running: true, mpsname: mpsname}
 			mpstab[mpsid].mpsuser()
-			fmt.Println(mpstab[mpsid].info)
+			dbg(mpstab[mpsid].info)
 		case "8":
 			lip := iniloadln(r)
 			rip := iniloadln(r)
@@ -1076,7 +1086,7 @@ func loadini() {
 			mpsid++
 			mpstab[mpsid] = &mpsinfo{listener: listener, ftype: 8, info: lip + "UTU TU->" + rip, lip: lip, rip: rip, id: mpsid, running: true}
 			mpstab[mpsid].ututu()
-			fmt.Println(mpstab[mpsid].info)
+			dbg(mpstab[mpsid].info)
 		case "9":
 			lip := iniloadln(r)
 			rip := iniloadln(r)
@@ -1089,7 +1099,7 @@ func loadini() {
 			mpsid++
 			mpstab[mpsid] = &mpsinfo{listener: listener, ftype: 9, info: lip + "UTU UT->" + rip, lip: lip, rip: rip, id: mpsid, running: true}
 			mpstab[mpsid].utuut()
-			fmt.Println(mpstab[mpsid].info)
+			dbg(mpstab[mpsid].info)
 		case "10":
 			lip := iniloadln(r)
 			psw := iniloadln(r)
@@ -1101,7 +1111,7 @@ func loadini() {
 			mpsid++
 			mpstab[mpsid] = &mpsinfo{lip: lip, listener: listener, ftype: 10, info: " TelSvr服务: " + lip, id: mpsid, psw: psw, running: true}
 			mpstab[mpsid].telsvr()
-			fmt.Println(mpstab[mpsid].info)
+			dbg(mpstab[mpsid].info)
 
 		case "11":
 			_ = iniloadln(r)
@@ -1111,7 +1121,7 @@ func loadini() {
 			mpsid++
 			mpstab[mpsid] = &mpsinfo{ftype: 11, lip: "0", info: " MPS中继服务:[" + mpsname + "]->" + rip, rip: rip, id: mpsid, mpsname: mpsname, running: true}
 			mpstab[mpsid].mpsrelay()
-			fmt.Println(mpstab[mpsid].info)
+			dbg(mpstab[mpsid].info)
 
 		case "12":
 			lip := iniloadln(r)
@@ -1121,7 +1131,7 @@ func loadini() {
 			mpsid++
 			mpstab[mpsid] = &mpsinfo{ftype: 12, info: " MPS服务桥: " + rip + "[" + mpsname + "]->" + lip, lip: lip, rip: rip, id: mpsid, mpsname: mpsname, running: true}
 			mpstab[mpsid].mpsbridge()
-			fmt.Println(mpstab[mpsid].info)
+			dbg(mpstab[mpsid].info)
 
 		case "13":
 			lip := iniloadln(r)
@@ -1135,7 +1145,7 @@ func loadini() {
 			mpsid++
 			mpstab[mpsid] = &mpsinfo{listener: listener, ftype: 13, info: lip + "TUT TU->" + rip, lip: lip, rip: rip, id: mpsid, running: true}
 			mpstab[mpsid].tuttu()
-			fmt.Println(mpstab[mpsid].info)
+			dbg(mpstab[mpsid].info)
 		case "14":
 			lip := iniloadln(r)
 			rip := iniloadln(r)
@@ -1150,7 +1160,7 @@ func loadini() {
 			mpsid++
 			mpstab[mpsid] = &mpsinfo{udplistener: udplistener, ftype: 14, info: lip + "TUT UT->" + rip, lip: lip, rip: rip, id: mpsid, running: true}
 			mpstab[mpsid].tutut()
-			fmt.Println(mpstab[mpsid].info)
+			dbg(mpstab[mpsid].info)
 		}
 	}
 	fmt.Print(list())
@@ -1173,7 +1183,7 @@ func quiter() { //程序退出标志
 
 func resume() { //测试返回
 	recover()
-	fmt.Println("Recovered")
+	dbg("Recovered")
 }
 
 func ptop2(conn net.Conn, rip string, psw string) { //执行转发
@@ -1191,7 +1201,7 @@ func ptop2(conn net.Conn, rip string, psw string) { //执行转发
 
 func (this *mpsinfo) ptop() { //端口转发服务
 	go func() {
-		defer fmt.Println("端口转发退出:", this.rip)
+		defer dbg("端口转发退出:", this.rip)
 		defer delete(mpstab, this.id)
 		defer recover()
 
@@ -1282,7 +1292,7 @@ func socksswich(conn net.Conn) { //判断代理类型
 
 func (this *mpsinfo) socks45() {
 	go func() {
-		defer fmt.Println("socks服务器退出")
+		defer dbg("socks服务器退出")
 		defer delete(mpstab, this.id)
 		defer recover()
 
@@ -1305,7 +1315,7 @@ func iniloadln(r *bufio.Reader) string {
 
 func (this *mpsinfo) ututu() {
 	go func() {
-		defer fmt.Println("TCPtoUDP退出:", this.rip)
+		defer dbg("TCPtoUDP退出:", this.rip)
 		defer delete(mpstab, this.id)
 		defer recover()
 
@@ -1518,7 +1528,7 @@ func xor(str, psw string) string { //异或加密
 
 func (this *mpsinfo) tuttu() {
 	go func() {
-		defer fmt.Println("TCPtoUDP退出:", this.rip)
+		defer dbg("TCPtoUDP退出:", this.rip)
 		defer delete(mpstab, this.id)
 		defer recover()
 		tuttab := make(map[int]net.Conn)
@@ -1527,13 +1537,13 @@ func (this *mpsinfo) tuttu() {
 		udpaddr, err := net.ResolveUDPAddr("udp4", this.rip)
 		if err != nil {
 			this.listener.Close()
-			fmt.Println("TUT-TU quit:", err)
+			dbg("TUT-TU quit:", err)
 			return
 		}
 		conn2, err := net.DialUDP("udp4", nil, udpaddr)
 		if err != nil {
 			this.listener.Close()
-			fmt.Println("TUT-TU quit:", err)
+			dbg("TUT-TU quit:", err)
 			return
 		}
 		//初始化mpsudp
@@ -1546,7 +1556,7 @@ func (this *mpsinfo) tuttu() {
 		for notquit && this.running {
 			conn, err := this.listener.Accept()
 			if err != nil {
-				fmt.Println("accept err", this.info)
+				dbg("accept err", this.info)
 				continue
 			}
 
@@ -1564,7 +1574,7 @@ func (this *mpsinfo) tuttu() {
 			} else {
 				connid++
 			}
-			fmt.Println("connid:", connid)
+			dbg("connid:", connid)
 		}
 	}()
 }
@@ -1584,7 +1594,7 @@ func tu1(connid int, conn net.Conn, mpsinfoa *mpsinfo, mpsudpa *mpsudp, treq cha
 	defer func() {
 		//indatareq <- idbuf
 		treq <- tabreq{i: connid}
-		//fmt.Println("tu quit", connid, mpsudpa.tuttab)
+		//dbg("tu quit", connid, mpsudpa.tuttab)
 		conn.Close()
 	}()
 	for notquit && mpsinfoa.running {
@@ -1608,7 +1618,7 @@ func ut1(mpsinfoa *mpsinfo, mpsudpa *mpsudp, treq chan tabreq) { //ut
 		connid = int(buf[0])<<8 + int(buf[1])
 		conn, ok := (*mpsudpa.tuttab)[connid]
 		if !ok {
-			fmt.Println("tut tu 无对应conn", connid)
+			dbg("tut tu 无对应conn", connid)
 			continue
 		}
 		_, err := conn.Write(buf[2:])
@@ -1650,7 +1660,7 @@ func (this *mpsinfo) tutut() {
 }
 
 func uttoreq(this *mpsinfo, utreq chan utdata) {
-	defer fmt.Println("UDPtoTCP退出:", this.rip)
+	defer dbg("UDPtoTCP退出:", this.rip)
 	defer delete(mpstab, this.id)
 	defer recover()
 	//监听地址
@@ -1699,7 +1709,7 @@ func (this *mpsudp) run() (indata chan []byte, outdata chan []byte) {
 			}
 
 			if id == bufa[0] {
-				fmt.Println("udp 重复信息丢弃。", id, bufa[:10])
+				dbg("udp 重复信息丢弃。", id, bufa[:10])
 				this.udpans <- []byte{bufa[0]}
 				continue
 			}
@@ -1721,7 +1731,7 @@ func (this *mpsudp) run() (indata chan []byte, outdata chan []byte) {
 				}
 			case buf := <-this.indatareq:
 				buf = append([]byte{id}, buf...)
-				//fmt.Println("udp write:", id)
+				//dbg("udp write:", id)
 				if this.udpaddr == nil {
 					this.udpconn.Write(buf)
 				} else {
@@ -1739,10 +1749,10 @@ func (this *mpsudp) run() (indata chan []byte, outdata chan []byte) {
 					case ida = <-this.tutidreq:
 						if ida == id {
 							i = 5
-							//fmt.Println(id, "ok")
+							//dbg(id, "ok")
 						} else {
 							i++
-							fmt.Println("udp received other one:", ida, id)
+							dbg("udp received other one:", ida, id)
 							if this.udpaddr == nil {
 								this.udpconn.Write(buf)
 							} else {
@@ -1753,7 +1763,7 @@ func (this *mpsudp) run() (indata chan []byte, outdata chan []byte) {
 						after = time.After(time.Millisecond * 10)
 						i++
 						//重发
-						//fmt.Println("udp resend:", id)
+						//dbg("udp resend:", id)
 						if this.udpaddr == nil {
 							this.udpconn.Write(buf)
 						} else {
@@ -1762,7 +1772,7 @@ func (this *mpsudp) run() (indata chan []byte, outdata chan []byte) {
 					}
 				}
 				if ida != id { //重试3次都不对
-					fmt.Println("mpsudp write err!id,ida", id, ida)
+					dbg("mpsudp write err!id,ida", id, ida)
 					//continue
 				}
 				if id == 255 {
