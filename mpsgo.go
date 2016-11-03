@@ -594,6 +594,13 @@ func inputerout(str string, conn net.Conn) {
 }
 
 func inputer(conn net.Conn, this *mpsinfo) { //cmd交互界面
+	if conn != nil {
+		pswipt := telsvrinputer("psw:", conn) //验证密码
+		if pswipt != this.psw {
+			conn.Close()
+			return
+		}
+	}
 	var inputstr string
 	var inputint int
 	for notquit && this.running {
@@ -740,7 +747,6 @@ func inputer(conn net.Conn, this *mpsinfo) { //cmd交互界面
 			inputerout(state(), conn)
 
 		case "9": //set
-
 			str := inputerin(strtab, conn)
 			switch str {
 			case "1":
@@ -915,16 +921,18 @@ func inputer(conn net.Conn, this *mpsinfo) { //cmd交互界面
 
 		case "0":
 			if conn == nil {
+				inputerout(strlist1, conn)
 				continue
 			}
 			conn.Close()
+			return
 
 		default: //help
-			if conn != nil && inputstr == "0" {
+			/*if conn != nil && inputstr == "0" {
 				return
 			}
+			inputstr = "0"*/
 			inputerout(strlist1, conn)
-			inputstr = "0"
 		}
 	}
 }
@@ -941,11 +949,7 @@ func (this *mpsinfo) telsvr() { //TelSvr服务
 				dbg("TelSvr接收错误", err)
 				return
 			}
-			pswipt := telsvrinputer("psw:", conn) //验证密码
-			if pswipt != this.psw {
-				conn.Close()
-				continue
-			}
+
 			dbg("TelSvr接收新连接。", conn.RemoteAddr())
 			go inputer(conn, this)
 		}
@@ -1215,7 +1219,7 @@ func (this *mpsinfo) ptop() { //端口转发服务
 	}()
 }
 
-func s5(conn net.Conn, n int) {
+func s5(conn net.Conn) {
 	defer recover()
 
 	bufab := make([]byte, RECV_BUF_LEN)
@@ -1282,9 +1286,9 @@ func socksswich(conn net.Conn) { //判断代理类型
 	defer recover()
 	bufab := make([]byte, RECV_BUF_LEN)
 	conn.SetDeadline(time.Now().Add(CONNTO_MIN))
-	n, err := conn.Read(bufab)
+	_, err := conn.Read(bufab)
 	if bytes.Equal(bufab[0:2], []byte{5, 1}) && err == nil { //socks5
-		s5(conn, n)
+		s5(conn)
 		return
 	}
 	conn.Close()
