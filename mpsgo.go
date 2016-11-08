@@ -587,7 +587,9 @@ func inputerin(str string, conn net.Conn) string {
 
 func inputerout(str string, conn net.Conn) {
 	if conn == nil {
-		fmt.Println(str)
+		if !hideflag {
+			fmt.Println(str)
+		}
 	} else {
 		conn.Write([]byte(str))
 	}
@@ -1406,6 +1408,16 @@ func utuut1(conn1 *net.UDPConn, udpaddr *net.UDPAddr, conn2 net.Conn) { //utu ut
 	}
 }
 
+func workerget() (net.Conn, net.Conn, string) {
+	select {
+	case labdate := <-abdatechan:
+		return labdate.conn, labdate.conn2, labdate.psw
+	case <-time.After(time.Minute * 30):
+		return nil, nil, ""
+	}
+
+}
+
 func Atob(conn, conn2 net.Conn, psw string) {
 	conn.SetDeadline(time.Now().Add(CONNTO_MAX))
 	conn2.SetDeadline(time.Now().Add(CONNTO_MAX))
@@ -1425,9 +1437,7 @@ func Atob(conn, conn2 net.Conn, psw string) {
 
 func Atobf() { //数据转发
 	abnumad <- true
-	lquit := false
 	var bufab []byte = make([]byte, RECV_BUF_LEN)
-	var labdate *abdate
 	var conn net.Conn
 	var conn2 net.Conn
 	var psw string
@@ -1435,10 +1445,12 @@ func Atobf() { //数据转发
 	defer func() {
 		abnumad <- false
 	}()
-	labdate = <-abdatechan
-	conn = labdate.conn
-	conn2 = labdate.conn2
-	psw = labdate.psw
+
+rst:
+	conn, conn2, psw = workerget()
+	if conn == nil {
+		return
+	}
 	pswlen := len(psw)
 	j := 0
 
@@ -1447,26 +1459,9 @@ func Atobf() { //数据转发
 		if n <= 0 || err != nil {
 			conn.Close()
 			conn2.Close()
-			conn = nil
-			conn2 = nil
-			labdate = nil
-			after := time.After(time.Minute * 30) //保留30分钟
-			select {
-			case abfchan <- true:
-				abwait <- true
-			case <-after:
-				lquit = true
-			}
-			if lquit {
-				return
-			}
-			labdate = <-abdatechan
-			conn = labdate.conn
-			conn2 = labdate.conn2
-			psw = labdate.psw
-			pswlen = len(psw)
-			j = 0
-			continue
+			abfchan <- true
+			abwait <- true
+			goto rst
 		}
 		if psw != "" {
 			for i := 0; i < n; i++ {
@@ -1481,26 +1476,9 @@ func Atobf() { //数据转发
 		if n <= 0 || err != nil {
 			conn.Close()
 			conn2.Close()
-			conn = nil
-			conn2 = nil
-			labdate = nil
-			after := time.After(time.Minute * 30)
-			select {
-			case abfchan <- true:
-				abwait <- true
-			case <-after:
-				lquit = true
-			}
-			if lquit {
-				return
-			}
-			labdate = <-abdatechan
-			conn = labdate.conn
-			conn2 = labdate.conn2
-			psw = labdate.psw
-			pswlen = len(psw)
-			j = 0
-			continue
+			abfchan <- true
+			abwait <- true
+			goto rst
 		}
 		req <- n
 		conn.SetDeadline(time.Now().Add(CONNTO_MAX))
