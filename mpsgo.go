@@ -1,9 +1,8 @@
 package main
 
-//ver 3.6.2 2016.11.3
+//ver 3.6.3 2016.11.11
 import (
 	"bufio"
-	"bytes"
 	"flag"
 	"fmt"
 	"io"
@@ -960,12 +959,16 @@ func (this *mpsinfo) telsvr() { //TelSvr服务
 
 func state() string {
 	var str string
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
 	str = "状态信息:\r\n"
 	str += fmt.Sprint(" NumCPU: ", Numcpu, " 转发纤程: ", abnum, " 空闲:", abwaitnum, "\r\n")
 	str += fmt.Sprint(" 转发数据: ", reads, " 速度：秒-10秒-10分钟 ", spd1, spd10, spd60, "\r\n")
 	for k, v := range mpssvrtab {
 		str += fmt.Sprint("mpsname:", k, " 资源:", strconv.Itoa(len(*(*v)["s"])), " 用户:", strconv.Itoa(len(*(*v)["u"])), " 对接:", mpsdone[k], "\r\n")
 	}
+	str += fmt.Sprint("HeapSys/程序向应用程序申请的内存:", m.HeapSys, " HeapAlloc/堆上目前分配的内存:", m.HeapAlloc, "\r\n")
+	str += fmt.Sprint("HeapIdle/堆上目前没有使用的内存:", m.HeapIdle, " HeapReleased/回收到操作系统的内存:", m.HeapReleased, "\r\n")
 	return str
 }
 
@@ -1216,15 +1219,13 @@ func (this *mpsinfo) ptop() { //端口转发服务
 			if err != nil {
 				return
 			}
-			go ptop2(conn, this.rip, this.psw)
+			ptop2(conn, this.rip, this.psw)
 		}
 	}()
 }
 
-func s5(conn net.Conn) {
+func s5(conn net.Conn, bufab []byte) {
 	defer recover()
-
-	bufab := make([]byte, RECV_BUF_LEN)
 	n, err := conn.Write([]byte{5, 0})
 	if err != nil {
 		conn.Close()
@@ -1237,8 +1238,12 @@ func s5(conn net.Conn) {
 	}
 
 	switch {
-	case bytes.Equal(bufab[0:4], []byte{5, 1, 0, 1}): //ip请求
+	case string(bufab[0:4]) == string([]byte{5, 1, 0, 1}): //ip请求
 		ip := fmt.Sprintf("%d.%d.%d.%d:%d", bufab[4], bufab[5], bufab[6], bufab[7], int(bufab[8])<<8+int(bufab[9]))
+		if bufab[4] == 0 {
+			conn.Close()
+			return
+		}
 		conn2, err := net.DialTimeout("tcp", ip, DialTO)
 		if err != nil {
 			bufab[1] = 3
@@ -1257,7 +1262,7 @@ func s5(conn net.Conn) {
 		Atob(conn, conn2, "")
 		Atob(conn2, conn, "")
 
-	case bytes.Equal(bufab[0:4], []byte{5, 1, 0, 3}): //域名请求
+	case string(bufab[0:4]) == string([]byte{5, 1, 0, 3}): //域名请求
 		ip := fmt.Sprintf("%s:%d", string(bufab[5:bufab[4]+5]), int(bufab[n-2])<<8+int(bufab[n-1]))
 		dbg("ip:", ip)
 		conn2, err := net.DialTimeout("tcp", ip, DialTO)
@@ -1284,19 +1289,24 @@ func s5(conn net.Conn) {
 	}
 }
 
-func socksswich(conn net.Conn) { //判断代理类型
+func socksswich(connchan chan net.Conn, this *mpsinfo) { //判断代理类型
 	defer recover()
-	bufab := make([]byte, RECV_BUF_LEN)
-	conn.SetDeadline(time.Now().Add(CONNTO_MIN))
-	_, err := conn.Read(bufab)
-	if bytes.Equal(bufab[0:2], []byte{5, 1}) && err == nil { //socks5
-		s5(conn)
-		return
+	bufab := make([]byte, 200)
+	for notquit && this.running {
+		conn := <-connchan
+		conn.SetDeadline(time.Now().Add(CONNTO_MIN))
+		_, err := conn.Read(bufab)
+		if string(bufab[0:2]) == string([]byte{5, 1}) && err == nil { //socks5
+			s5(conn, bufab)
+			continue
+		}
+		conn.Close()
 	}
-	conn.Close()
 }
 
 func (this *mpsinfo) socks45() {
+	connchan := make(chan net.Conn, 500)
+	go socksswich(connchan, this)
 	go func() {
 		defer dbg("socks服务器退出")
 		defer delete(mpstab, this.id)
@@ -1306,9 +1316,10 @@ func (this *mpsinfo) socks45() {
 			conn, err := this.listener.Accept() //接受连接
 			if err != nil {
 				dbg("接受代理错误1：" + err.Error())
+				this.running = false
 				return
 			}
-			go socksswich(conn)
+			connchan <- conn
 		}
 	}()
 }
