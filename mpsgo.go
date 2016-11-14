@@ -660,14 +660,16 @@ func inputer(conn net.Conn, this *mpsinfo) { //cmd交互界面
             if psw == "*" {
                 continue
             }
-
+            if psw == " " {
+                psw = ""
+            }
             var listener, err = net.Listen("tcp", lip) //侦听端口
             if err != nil {
                 inputerout("添加端口转发失败:"+err.Error(), conn)
                 continue
             }
             mpsid++
-            mpstab[mpsid] = &mpsinfo{listener: listener, ftype: 3, info: lip + "->" + rip + "psw:" + psw, lip: lip, rip: rip, psw: psw, id: mpsid, running: true}
+            mpstab[mpsid] = &mpsinfo{listener: listener, ftype: 3, info: lip + "->" + rip + " psw:" + psw, lip: lip, rip: rip, psw: psw, id: mpsid, running: true}
             mpstab[mpsid].ptop()
             inputerout(mpstab[mpsid].info, conn)
             inputerout(list(), conn)
@@ -1025,6 +1027,9 @@ func loadini() {
             lip := iniloadln(r)
             rip := iniloadln(r)
             psw := iniloadln(r)
+            if psw == " " {
+                psw = ""
+            }
 
             listener, err = net.Listen("tcp", lip) //侦听端口
             if err != nil {
@@ -1032,7 +1037,7 @@ func loadini() {
                 continue
             }
             mpsid++
-            mpstab[mpsid] = &mpsinfo{listener: listener, ftype: 3, info: lip + "->" + rip + "psw:" + psw, lip: lip, rip: rip, psw: psw, id: mpsid, running: true}
+            mpstab[mpsid] = &mpsinfo{listener: listener, ftype: 3, info: lip + "->" + rip + " psw:" + psw, lip: lip, rip: rip, psw: psw, id: mpsid, running: true}
             mpstab[mpsid].ptop()
             dbg(mpstab[mpsid].info)
 
@@ -1114,6 +1119,9 @@ func loadini() {
         case "10":
             lip := iniloadln(r)
             psw := iniloadln(r)
+            if psw == " " {
+                psw = ""
+            }
             listener, err = net.Listen("tcp", lip)
             if err != nil {
                 fmt.Println("启动Telsvr服务失败:" + err.Error())
