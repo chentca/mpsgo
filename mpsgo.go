@@ -27,7 +27,7 @@ var strlist0 []string = []string{
     "0:帮助，help;Telnet 0 to quit.",
     "1:MPS运行列表,MPS list",
     "2:停止一项MPS服务,Stop a MPS",
-    "3:端口转发,AtoB",
+    "3:端口转发,Port to Port",
     "4:socks5代理,Sock5",
     "5:远程端口转发服务,MPS svr",
     "6:远程端口资源（反向连接资源）,MPS source",
@@ -650,7 +650,7 @@ func inputer(conn net.Conn, this *mpsinfo) { //cmd交互界面
             if lip == "*" || len(lip) == 0 {
                 continue
             }
-            rip = inputerin("请输入转发端口(如：123.0.0.123:80 或 www.xxx.com:80)*取消:", conn)
+            rip = inputerin("请输入转发端口(如：1.2.3.4:80 或 1.2.3.4:80;1.2.3.4:82)*取消:", conn)
 
             if rip == "*" || len(rip) == 0 {
                 continue
@@ -1197,23 +1197,31 @@ func resume() { //测试返回
     dbg("Recovered")
 }
 
-func ptop2(conn net.Conn, rip string, psw string) { //执行转发
+func ptop2(connchan chan net.Conn, rip string, psw string) { //执行转发
     defer recover()
-    conn2, err := net.Dial("tcp", rip)
-    if err != nil {
-        fmt.Println("conn2 err" + err.Error())
-        conn.Close()
-        return
+    for conn := range connchan {
+        dbg("PtoP will dial to:", rip)
+        conn2, err := net.Dial("tcp", rip)
+        if err != nil {
+            fmt.Println("conn2 err" + err.Error())
+            conn.Close()
+            continue
+        }
+        Atob(conn, conn2, psw)
+        Atob(conn2, conn, psw)
     }
-
-    Atob(conn, conn2, psw)
-    Atob(conn2, conn, psw)
 }
 
 func (this *mpsinfo) ptop() { //端口转发服务
+    var connchan chan net.Conn = make(chan net.Conn, 10)
+    var riplst []string = strings.Split(this.rip, ";")
+    for _, rip := range riplst {
+        go ptop2(connchan, rip, this.psw)
+    }
     go func() {
         defer dbg("端口转发退出:", this.rip)
         defer delete(mpstab, this.id)
+        defer close(connchan)
         defer recover()
 
         for notquit && this.running {
@@ -1221,7 +1229,7 @@ func (this *mpsinfo) ptop() { //端口转发服务
             if err != nil {
                 return
             }
-            ptop2(conn, this.rip, this.psw)
+            connchan <- conn
         }
     }()
 }
